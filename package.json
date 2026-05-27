@@ -1,0 +1,13 @@
+{
+  "name": "isler-botu",
+  "version": "1.0.0",
+  "description": "İşler Panosu Telegram Botu",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "node-telegram-bot-api": "^0.64.0",
+    "@notionhq/client": "^2.2.15"
+  }
+}

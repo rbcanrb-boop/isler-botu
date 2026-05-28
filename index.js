@@ -185,8 +185,11 @@ SOHBET için:
 
   try {
     const yanit = await geminiSor(prompt);
-    const temiz = yanit.replace(/```json|```/g, '').trim();
-    return JSON.parse(temiz);
+    console.log('Gemini yaniti:', yanit.substring(0, 300));
+    const temiz = yanit.replace(/```json\s*/gi, '').replace(/```\s*/gi, '').trim();
+    const jsonMatch = temiz.match(/\{[\s\S]*\}/);
+    if (!jsonMatch) return { eylem: 'SOHBET', yanit: temiz || 'Anlamadım, tekrar yazar mısın?' };
+    return JSON.parse(jsonMatch[0]);
   } catch (e) {
     console.error('AI parse hatası:', e.message);
     return { eylem: 'SOHBET', yanit: 'Anlamadım, tekrar yazar mısın?' };

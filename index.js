@@ -134,7 +134,7 @@ async function buHaftanınShiftiniGetir() {
 }
 
 function shiftBilgisiniParse(metin) {
-  // Format: "C shifti BL B shifti Can A shifti Dean BL Çarşamba izin, Can Perşembe izin, Dean Salı izin"
+  // Format: "C shifti BL B shifti Can A shifti Deaven BL Çarşamba izin, Can Perşembe izin, Deaven Salı izin"
   const kisiler = {};
   const izinler = {};
 
@@ -169,7 +169,7 @@ function suAnMesaideKimVar(shiftData, saat = null) {
 
   const kisiler = [
     { ad: 'Can', shiftProp: 'Can_Shift', izinProp: 'Can_Izin' },
-    { ad: 'Dean', shiftProp: 'Dean_Shift', izinProp: 'Dean_Izin' },
+    { ad: 'Deaven', shiftProp: 'Deaven_Shift', izinProp: 'Deaven_Izin' },
     { ad: 'BL', shiftProp: 'BL_Shift', izinProp: 'BL_Izin' }
   ];
 
@@ -228,7 +228,7 @@ async function shiftKaydet(metin, chatId) {
   const { kisiler, izinler } = shiftBilgisiniParse(metin);
 
   if (Object.keys(kisiler).length === 0) {
-    await mesajGonder(chatId, '❌ Shift bilgisi anlaşılamadı. Format: "C shifti BL B shifti Can A shifti Dean BL Çarşamba izin, Can Perşembe izin, Dean Salı izin"');
+    await mesajGonder(chatId, '❌ Shift bilgisi anlaşılamadı. Format: "C shifti BL B shifti Can A shifti Deaven BL Çarşamba izin, Can Perşembe izin, Deaven Salı izin"');
     return;
   }
 
@@ -241,8 +241,8 @@ async function shiftKaydet(metin, chatId) {
     'Hafta': { title: [{ text: { content: hafta } }] },
     'Can_Shift': { rich_text: [{ text: { content: kisiler['Can'] || '' } }] },
     'Can_Izin': { rich_text: [{ text: { content: izinler['Can'] || '' } }] },
-    'Dean_Shift': { rich_text: [{ text: { content: kisiler['Dean'] || '' } }] },
-    'Dean_Izin': { rich_text: [{ text: { content: izinler['Dean'] || '' } }] },
+    'Deaven_Shift': { rich_text: [{ text: { content: kisiler['Deaven'] || '' } }] },
+    'Deaven_Izin': { rich_text: [{ text: { content: izinler['Deaven'] || '' } }] },
     'BL_Shift': { rich_text: [{ text: { content: kisiler['BL'] || '' } }] },
     'BL_Izin': { rich_text: [{ text: { content: izinler['BL'] || '' } }] }
   };
@@ -299,16 +299,18 @@ async function bitenIsleriGetir(tarihStr = null) {
 
   const response = await notion.databases.query({
     database_id: DATABASE_ID,
-    filter: {
-      and: [
-        { property: 'DURUM', select: { equals: 'BİTTİ' } },
-        { property: 'last_edited_time', date: { on_or_after: `${hedefTarih}T00:00:00` } },
-        { property: 'last_edited_time', date: { on_or_before: `${hedefTarih}T23:59:59` } }
-      ]
-    },
+    filter: { property: 'DURUM', select: { equals: 'BİTTİ' } },
     sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
   });
-  return { results: response.results, tarih: hedefTarih };
+
+  // JS tarafında tarihe göre filtrele
+  const results = response.results.filter(is => {
+    const editedAt = is.last_edited_time;
+    if (!editedAt) return false;
+    return editedAt.startsWith(hedefTarih);
+  });
+
+  return { results, tarih: hedefTarih };
 }
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
@@ -430,7 +432,7 @@ async function tekrarEdenIsleriGetir() {
   try {
     const response = await notion.databases.query({
       database_id: TEKRAR_DATABASE_ID,
-      filter: { property: 'AKTİF', checkbox: { equals: true } }
+      filter: { property: 'Aktif', checkbox: { equals: true } }
     });
     return response.results;
   } catch (e) {
@@ -584,7 +586,7 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
         'TEKRAR_TİPİ': { select: { name: durum.tekrarTip } },
         'TEKRAR_GÜNÜ': { rich_text: [{ text: { content: durum.tekrarGun || 'Her Gün' } }] },
         'TEKRAR_SAATİ': { rich_text: [{ text: { content: durum.tekrarSaat } }] },
-        'AKTİF': { checkbox: true }
+        'Aktif': { checkbox: true }
       };
 
       if (durum.altMaddeler && durum.altMaddeler.toLowerCase() !== 'yok') {

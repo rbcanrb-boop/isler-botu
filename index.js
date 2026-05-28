@@ -432,7 +432,7 @@ async function tekrarEdenIsleriGetir() {
   try {
     const response = await notion.databases.query({
       database_id: TEKRAR_DATABASE_ID,
-      filter: { property: 'Aktif', checkbox: { equals: true } }
+      // Tüm tekrar eden işleri getir
     });
     return response.results;
   } catch (e) {
@@ -586,7 +586,7 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
         'TEKRAR_TİPİ': { select: { name: durum.tekrarTip } },
         'TEKRAR_GÜNÜ': { rich_text: [{ text: { content: durum.tekrarGun || 'Her Gün' } }] },
         'TEKRAR_SAATİ': { rich_text: [{ text: { content: durum.tekrarSaat } }] },
-        'Aktif': { checkbox: true }
+
       };
 
       if (durum.altMaddeler && durum.altMaddeler.toLowerCase() !== 'yok') {

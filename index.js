@@ -708,6 +708,6 @@ bot.on('message', async (msg) => {
 
 setInterval(kritikIsleriiBildir, 30 * 60 * 1000);
 setInterval(yuksekIsleriiBildir, 45 * 60 * 1000);
-setInterval(tekrarEdenIsleriKontrolEt, 60 * 1000);
+setInterval(tekrarEdenIsleriKontrolEt, 5 * 60 * 1000);
 
 console.log('🤖 İşler Botu başlatıldı!');

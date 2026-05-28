@@ -4,12 +4,12 @@ const { Client } = require('@notionhq/client');
 const TOKEN = process.env.BOT_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
 const DATABASE_ID = process.env.DATABASE_ID;
+const ARSIV_DATABASE_ID = process.env.ARSIV_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
 
-// Kullanıcı durumlarını hafızada tut
 const kullaniciDurum = {};
 
 // =========================================
@@ -18,11 +18,11 @@ const kullaniciDurum = {};
 
 function oncelikEmoji(oncelik) {
   if (!oncelik) return '⚪';
-  const o = oncelik.toUpperCase();
-  if (o === 'KRİTİK' || o === 'KRITIK') return '🔴';
-  if (o === 'YÜKSEK' || o === 'YUKSEK') return '🟡';
-  if (o === 'NORMAL') return '🟢';
-  if (o === 'BEKLEMEDE') return '🔵';
+  const o = oncelik.toUpperCase().replace('İ', 'I');
+  if (o.includes('KRIT')) return '🔴';
+  if (o.includes('YÜKSEK') || o.includes('YUKSEK')) return '🟡';
+  if (o.includes('NORMAL')) return '🟢';
+  if (o.includes('BEKLEM')) return '🔵';
   return '⚪';
 }
 
@@ -41,30 +41,32 @@ function tarihFormat(tarihStr) {
   }
 }
 
+function bugunTarih() {
+  const d = new Date();
+  const gun = String(d.getDate()).padStart(2, '0');
+  const ay = String(d.getMonth() + 1).padStart(2, '0');
+  const yil = d.getFullYear();
+  return `${gun}.${ay}.${yil}`;
+}
+
 function notionMetinAl(prop) {
   if (!prop) return '-';
-  if (prop.type === 'title' && prop.title) {
-    return prop.title.map(t => t.plain_text).join('') || '-';
-  }
-  if (prop.type === 'rich_text' && prop.rich_text) {
-    return prop.rich_text.map(t => t.plain_text).join('') || '-';
-  }
-  if (prop.type === 'select' && prop.select) {
-    return prop.select.name || '-';
-  }
-  if (prop.type === 'date' && prop.date) {
-    return tarihFormat(prop.date.start);
-  }
-  if (prop.type === 'checkbox') {
-    return prop.checkbox ? 'Evet' : 'Hayır';
-  }
+  if (prop.type === 'title' && prop.title) return prop.title.map(t => t.plain_text).join('') || '-';
+  if (prop.type === 'rich_text' && prop.rich_text) return prop.rich_text.map(t => t.plain_text).join('') || '-';
+  if (prop.type === 'select' && prop.select) return prop.select.name || '-';
+  if (prop.type === 'date' && prop.date) return tarihFormat(prop.date.start);
+  if (prop.type === 'checkbox') return prop.checkbox ? 'Evet' : 'Hayır';
   return '-';
 }
 
 async function mesajGonder(chatId, metin, klavye) {
   const opts = { parse_mode: 'HTML' };
   if (klavye) opts.reply_markup = klavye;
-  await bot.sendMessage(chatId, metin, opts);
+  try {
+    await bot.sendMessage(chatId, metin, opts);
+  } catch (e) {
+    console.error('Mesaj gönderme hatası:', e.message);
+  }
 }
 
 // =========================================
@@ -74,28 +76,26 @@ async function mesajGonder(chatId, metin, klavye) {
 async function acikIsleriGetir() {
   const response = await notion.databases.query({
     database_id: DATABASE_ID,
-    filter: {
-      property: 'DURUM',
-      select: { equals: 'AÇIK' }
-    }
+    filter: { property: 'DURUM', select: { equals: 'AÇIK' } }
+  });
+  return response.results;
+}
+
+async function bitenIsleriGetir() {
+  const response = await notion.databases.query({
+    database_id: DATABASE_ID,
+    filter: { property: 'DURUM', select: { equals: 'BİTTİ' } },
+    sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
   });
   return response.results;
 }
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline) {
   const properties = {
-    'İş Başlığı': {
-      title: [{ text: { content: isAdi } }]
-    },
-    'DURUM': {
-      select: { name: 'AÇIK' }
-    },
-    'ÖNCELİK': {
-      select: { name: oncelik.toUpperCase().replace('🔴 ', '').replace('🟡 ', '').replace('🟢 ', '').replace('🔵 ', '') }
-    },
-    'SORUMLU': {
-      rich_text: [{ text: { content: sorumlu } }]
-    }
+    'İş Başlığı': { title: [{ text: { content: isAdi } }] },
+    'DURUM': { select: { name: 'AÇIK' } },
+    'ÖNCELİK': { select: { name: oncelik } },
+    'SORUMLU': { rich_text: [{ text: { content: sorumlu } }] }
   };
 
   if (deadline && deadline.toLowerCase() !== 'yok') {
@@ -113,6 +113,33 @@ async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline) {
   return await notion.pages.create({
     parent: { database_id: DATABASE_ID },
     properties
+  });
+}
+
+async function isArsivle(page) {
+  const baslik = notionMetinAl(page.properties['İş Başlığı']);
+  const oncelik = notionMetinAl(page.properties['ÖNCELİK']);
+  const sorumlu = notionMetinAl(page.properties['SORUMLU']);
+  const deadline = notionMetinAl(page.properties['Deanline']);
+  const notlar = notionMetinAl(page.properties['NOTLAR']);
+
+  // Arşiv database'ine kopyala
+  await notion.pages.create({
+    parent: { database_id: ARSIV_DATABASE_ID },
+    properties: {
+      'İş Başlığı': { title: [{ text: { content: baslik } }] },
+      'DURUM': { select: { name: 'BİTTİ' } },
+      'ÖNCELİK': { select: { name: oncelik === '-' ? 'NORMAL' : oncelik } },
+      'SORUMLU': { rich_text: [{ text: { content: sorumlu === '-' ? '' : sorumlu } }] },
+      'Deanline': deadline !== '-' ? { date: { start: new Date().toISOString() } } : undefined,
+      'Arşivlenme Tarihi': { date: { start: new Date().toISOString() } }
+    }
+  });
+
+  // Orijinal sayfayı sil (arşivle)
+  await notion.pages.update({
+    page_id: page.id,
+    archived: true
   });
 }
 
@@ -136,12 +163,9 @@ async function bitenIsleriKontrolEt() {
       const metin = `✅ <b>İŞ TAMAMLANDI</b>\n━━━━━━━━━━━━━━━\n\n${oncelikEmoji(oncelik)} <b>${baslik}</b>\n👤 ${sorumlu}\n\nTebrikler! 🎉`;
       await bot.sendMessage(CHAT_ID, metin, { parse_mode: 'HTML' });
 
-      // Bildirim gönderildi olarak işaretle
       await notion.pages.update({
         page_id: is.id,
-        properties: {
-          'Bildirim Gönderildi': { checkbox: true }
-        }
+        properties: { 'Bildirim Gönderildi': { checkbox: true } }
       });
     }
   } catch (e) {
@@ -157,15 +181,12 @@ bot.onText(/\/acik/, async (msg) => {
   const chatId = msg.chat.id;
   try {
     const isler = await acikIsleriGetir();
-
     if (isler.length === 0) {
       await mesajGonder(chatId, '📋 <b>AÇIK İŞLER</b>\n━━━━━━━━━━━━━━━\n\n🎉 Açık iş yok, her şey temiz!');
       return;
     }
 
     let metin = `📋 <b>AÇIK İŞLER (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
-
-    // Önceliğe göre grupla
     const gruplar = { 'KRİTİK': [], 'YÜKSEK': [], 'NORMAL': [], 'BEKLEMEDE': [], 'DİĞER': [] };
 
     for (const is of isler) {
@@ -173,9 +194,7 @@ bot.onText(/\/acik/, async (msg) => {
       const baslik = notionMetinAl(is.properties['İş Başlığı']);
       const sorumlu = notionMetinAl(is.properties['SORUMLU']);
       const deadline = notionMetinAl(is.properties['Deanline']);
-
       const isKarti = `${oncelikEmoji(oncelik)} <b>${baslik}</b>\n👤 ${sorumlu}\n⏰ ${deadline}`;
-
       if (gruplar[oncelik]) gruplar[oncelik].push(isKarti);
       else gruplar['DİĞER'].push(isKarti);
     }
@@ -197,7 +216,58 @@ bot.onText(/\/acik/, async (msg) => {
 
     await mesajGonder(chatId, metin.trim());
   } catch (e) {
-    console.error('Açık işler hatası:', e);
+    await mesajGonder(chatId, '❌ Hata: ' + e.message);
+  }
+});
+
+bot.onText(/\/biten/, async (msg) => {
+  const chatId = msg.chat.id;
+  try {
+    const isler = await bitenIsleriGetir();
+    if (isler.length === 0) {
+      await mesajGonder(chatId, '✅ <b>BİTEN İŞLER</b>\n━━━━━━━━━━━━━━━\n\nHenüz biten iş yok.');
+      return;
+    }
+
+    let metin = `✅ <b>BİTEN İŞLER (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
+    for (const is of isler) {
+      const baslik = notionMetinAl(is.properties['İş Başlığı']);
+      const sorumlu = notionMetinAl(is.properties['SORUMLU']);
+      const oncelik = notionMetinAl(is.properties['ÖNCELİK']);
+      metin += `${oncelikEmoji(oncelik)} <b>${baslik}</b>\n👤 ${sorumlu}\n\n`;
+    }
+
+    metin += `\nArşivlemek için /arsivle yaz.`;
+    await mesajGonder(chatId, metin.trim());
+  } catch (e) {
+    await mesajGonder(chatId, '❌ Hata: ' + e.message);
+  }
+});
+
+bot.onText(/\/arsivle/, async (msg) => {
+  const chatId = msg.chat.id;
+  try {
+    const isler = await bitenIsleriGetir();
+    if (isler.length === 0) {
+      await mesajGonder(chatId, '🗂️ Arşivlenecek biten iş yok.');
+      return;
+    }
+
+    await mesajGonder(chatId, `⏳ ${isler.length} iş arşivleniyor...`);
+
+    let basarili = 0;
+    for (const is of isler) {
+      try {
+        await isArsivle(is);
+        basarili++;
+      } catch (e) {
+        console.error('Arşivleme hatası:', e.message);
+      }
+    }
+
+    const metin = `🗂️ <b>${basarili} İŞ ARŞİVLENDİ</b>\n━━━━━━━━━━━━━━━\n\nİyi geceler ekip 😴`;
+    await bot.sendMessage(CHAT_ID, metin, { parse_mode: 'HTML' });
+  } catch (e) {
     await mesajGonder(chatId, '❌ Hata: ' + e.message);
   }
 });
@@ -218,7 +288,7 @@ bot.onText(/\/iptal/, async (msg) => {
 
 bot.onText(/\/yardim|\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n/acik — Açık işleri listeler\n/yeni — Yeni iş açar\n/iptal — İşlemi iptal eder\n/yardim — Bu menüyü gösterir`;
+  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n/acik — Açık işleri listeler\n/biten — Biten işleri listeler\n/arsivle — Biten işleri arşive taşır\n/yeni — Yeni iş açar\n/iptal — İşlemi iptal eder\n/yardim — Bu menüyü gösterir`;
   await mesajGonder(chatId, metin);
 });
 
@@ -229,8 +299,6 @@ bot.onText(/\/yardim|\/start/, async (msg) => {
 bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const metin = msg.text || '';
-
-  // Komutları atla
   if (metin.startsWith('/')) return;
 
   const durum = kullaniciDurum[chatId];
@@ -269,13 +337,10 @@ bot.on('message', async (msg) => {
 
     try {
       await yeniIsOlustur(durum.isAdi, durum.oncelik, durum.sorumlu, durum.deadline);
-
       const emoji = oncelikEmoji(durum.oncelik);
       const deadlineMetin = durum.deadline.toLowerCase() === 'yok' ? 'Deadline yok' : durum.deadline;
-
       const bildirim = `🆕 <b>YENİ İŞ AÇILDI</b>\n━━━━━━━━━━━━━━━\n\n${emoji} <b>${durum.isAdi}</b>\n👤 ${durum.sorumlu}\n⏰ ${deadlineMetin}`;
       await bot.sendMessage(CHAT_ID, bildirim, { parse_mode: 'HTML' });
-
       if (String(chatId) !== String(CHAT_ID)) {
         await mesajGonder(chatId, '✅ İş başarıyla açıldı!');
       }
@@ -287,10 +352,11 @@ bot.on('message', async (msg) => {
 });
 
 // =========================================
-//   BİTEN İŞLERİ KONTROL (Her 5 dakika)
+//   OTOMATİK KONTROLLER
 // =========================================
 
+// Her 5 dakikada biten işleri kontrol et
 setInterval(bitenIsleriKontrolEt, 5 * 60 * 1000);
-bitenIsleriKontrolEt(); // Başlangıçta bir kere çalıştır
+bitenIsleriKontrolEt();
 
 console.log('🤖 İşler Botu başlatıldı!');

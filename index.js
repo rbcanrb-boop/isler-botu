@@ -113,35 +113,17 @@ async function mesajGonder(chatId, metin, klavye) {
 // =========================================
 
 async function geminiSor(prompt) {
-  return new Promise((resolve, reject) => {
-    const body = JSON.stringify({
-      contents: [{ parts: [{ text: prompt }] }],
-      generationConfig: { temperature: 0.1, maxOutputTokens: 500 }
-    });
-
-    const options = {
-      hostname: 'generativelanguage.googleapis.com',
-      path: `/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`,
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json', 'Content-Length': Buffer.byteLength(body) }
-    };
-
-    const req = https.request(options, (res) => {
-      let data = '';
-      res.on('data', chunk => data += chunk);
-      res.on('end', () => {
-        try {
-          const json = JSON.parse(data);
-          const text = json.candidates?.[0]?.content?.parts?.[0]?.text || '';
-          resolve(text.trim());
-        } catch (e) { reject(e); }
-      });
-    });
-
-    req.on('error', reject);
-    req.write(body);
-    req.end();
-  });
+  const axios = require('axios');
+  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const body = {
+    contents: [{ parts: [{ text: prompt }] }],
+    generationConfig: { temperature: 0.1, maxOutputTokens: 500 }
+  };
+  const response = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
+  console.log('Gemini HTTP status:', response.status);
+  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
+  console.log('Gemini ham yanit:', text.substring(0, 300));
+  return text.trim();
 }
 
 async function aiMesajiIsle(chatId, mesaj, acikIsler) {

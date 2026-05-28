@@ -481,12 +481,16 @@ function tekrarTetiklenmelimi(is, simdi = new Date()) {
 }
 
 async function tekrarEdenIsleriKontrolEt() {
+  console.log("[TEKRAR] Kontrol başladı:", new Date().toISOString());
   const isler = await tekrarEdenIsleriGetir();
+  console.log("[TEKRAR] İş sayısı:", isler.length);
   const shiftData = await buHaftanınShiftiniGetir();
   const simdi = new Date();
 
   for (const is of isler) {
-    if (!tekrarTetiklenmelimi(is, simdi)) continue;
+    const tetikle = tekrarTetiklenmelimi(is, simdi);
+    console.log("[TEKRAR] İş:", is.properties["İş Başlığı"]?.title?.[0]?.plain_text, "Tetikle:", tetikle);
+    if (!tetikle) continue;
 
     const baslik = notionMetinAl(is.properties['İş Başlığı']);
     const oncelik = notionMetinAl(is.properties['ÖNCELİK']);

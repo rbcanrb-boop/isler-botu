@@ -505,7 +505,11 @@ async function tekrarEdenIsleriKontrolEt() {
 
     // Ana veritabanına yeni iş ekle
     try {
-      await yeniIsOlustur(baslik, oncelik === '-' ? 'NORMAL' : oncelik, sorumlu, 'yok', altMaddeler === '-' ? 'yok' : altMaddeler);
+      // Alt maddeler + otomatik bilgi satırı
+      let altMaddelerSon = altMaddeler === '-' ? '' : altMaddeler;
+      const otomatikNot = `Otomatik açıldı,Kim yaptı: ${sorumlu}`;
+      const altMaddelerGonder = altMaddelerSon ? altMaddelerSon + ',' + otomatikNot : otomatikNot;
+      await yeniIsOlustur(baslik, oncelik === '-' ? 'NORMAL' : oncelik, sorumlu, 'yok', altMaddelerGonder);
 
       // Son tetiklenme tarihini güncelle
       await notion.pages.update({
@@ -828,7 +832,8 @@ bot.onText(/\/iptal/, async (msg) => {
 
 bot.onText(/\/yardim|\/start/, async (msg) => {
   const chatId = msg.chat.id;
-  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Açık kritik işler\n/yüksek — Açık yüksek öncelikli işler\n/normal — Açık normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n❌ /iptal — İşlemi iptal et\n❓ /yardim — Bu menü`;
+  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Açık kritik işler\n/yüksek — Açık yüksek öncelikli işler\n/normal — Açık normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele
+/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n❌ /iptal — İşlemi iptal et\n❓ /yardim — Bu menü`;
   await mesajGonder(chatId, metin);
 });
 

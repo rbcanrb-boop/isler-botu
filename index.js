@@ -162,8 +162,9 @@ function suAnMesaideKimVar(shiftData, saat = null) {
   if (!shiftData) return [];
 
   const props = shiftData.properties;
-  const bugunGun = gunAdi();
-  const simdi = saat !== null ? saat : new Date().getHours() + new Date().getMinutes() / 60;
+  const trSimdi = new Date(new Date().getTime() + 3 * 60 * 60 * 1000);
+  const bugunGun = gunAdi(trSimdi);
+  const simdi = saat !== null ? saat : trSimdi.getUTCHours() + trSimdi.getUTCMinutes() / 60;
 
   const mesaideOlanlar = [];
 
@@ -442,6 +443,8 @@ async function tekrarEdenIsleriGetir() {
 }
 
 function tekrarTetiklenmelimi(is, simdi = new Date()) {
+  // UTC+3 Türkiye saatine çevir
+  const trSimdi = new Date(simdi.getTime() + 3 * 60 * 60 * 1000);
   const tip = notionMetinAl(is.properties['TEKRAR_TİPİ']);
   const gun = notionMetinAl(is.properties['TEKRAR_GÜNÜ']);
   const saatStr = notionMetinAl(is.properties['TEKRAR_SAATİ']);
@@ -451,8 +454,8 @@ function tekrarTetiklenmelimi(is, simdi = new Date()) {
 
   // Saat kontrolü (±2 dakika tolerans)
   const [hedefSaat, hedefDakika] = saatStr.split(':').map(Number);
-  const simdikiSaat = simdi.getHours();
-  const simdikiDakika = simdi.getMinutes();
+  const simdikiSaat = trSimdi.getUTCHours();
+  const simdikiDakika = trSimdi.getUTCMinutes();
   const hedefToplam = hedefSaat * 60 + hedefDakika;
   const simdikiToplam = simdikiSaat * 60 + simdikiDakika;
   if (Math.abs(hedefToplam - simdikiToplam) > 2) return false;
@@ -464,8 +467,8 @@ function tekrarTetiklenmelimi(is, simdi = new Date()) {
     if (farkDk < 60) return false; // 1 saatten az geçmişse tetikleme
   }
 
-  const bugunGunAdi = gunAdi(simdi);
-  const bugunGunNo = simdi.getDate();
+  const bugunGunAdi = gunAdi(trSimdi);
+  const bugunGunNo = trSimdi.getUTCDate();
 
   if (tip === 'Günlük') return true;
 

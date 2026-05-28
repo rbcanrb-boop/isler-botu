@@ -8,6 +8,7 @@
   },
   "dependencies": {
     "node-telegram-bot-api": "^0.64.0",
-    "@notionhq/client": "^2.2.15"
+    "@notionhq/client": "^2.2.15",
+    "axios": "^1.6.0"
   }
 }

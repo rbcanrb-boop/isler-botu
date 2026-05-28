@@ -114,15 +114,23 @@ async function mesajGonder(chatId, metin, klavye) {
 
 async function geminiSor(prompt) {
   const axios = require('axios');
-  const url = `https://generativelanguage.googleapis.com/v1beta/models/gemini-2.0-flash:generateContent?key=${GEMINI_API_KEY}`;
+  const url = 'https://api.deepseek.com/chat/completions';
   const body = {
-    contents: [{ parts: [{ text: prompt }] }],
-    generationConfig: { temperature: 0.1, maxOutputTokens: 500 }
+    model: 'deepseek-chat',
+    messages: [{ role: 'user', content: prompt }],
+    temperature: 0.1,
+    max_tokens: 500
   };
-  const response = await axios.post(url, body, { headers: { 'Content-Type': 'application/json' }, timeout: 15000 });
-  console.log('Gemini HTTP status:', response.status);
-  const text = response.data?.candidates?.[0]?.content?.parts?.[0]?.text || '';
-  console.log('Gemini ham yanit:', text.substring(0, 300));
+  const response = await axios.post(url, body, {
+    headers: {
+      'Content-Type': 'application/json',
+      'Authorization': `Bearer ${process.env.GEMINI_API_KEY}`
+    },
+    timeout: 15000
+  });
+  console.log('DeepSeek HTTP status:', response.status);
+  const text = response.data?.choices?.[0]?.message?.content || '';
+  console.log('DeepSeek yanit:', text.substring(0, 300));
   return text.trim();
 }
 

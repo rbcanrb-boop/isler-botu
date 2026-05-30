@@ -525,9 +525,7 @@ Eğer kullanıcı bir iş tamamlamak veya iptal etmek istiyorsa ama hangi iş ol
 Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.`;
 
   const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const result = await model.generateContent([
-    { role: 'user', parts: [{ text: sistemPrompt + '\n\nKullanıcı mesajı: ' + kullaniciMesaji }] }
-  ]);
+  const result = await model.generateContent(sistemPrompt + '\n\nKullanıcı mesajı: ' + kullaniciMesaji);
 
   const rawCevap = result.response.text().replace(/```json|```/g, '').trim();
 

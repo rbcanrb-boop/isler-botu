@@ -442,7 +442,7 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
 }
 
 // =========================================
-//   GEMINI AI FONKSİYONLARI
+//   HAYDAR AI
 // =========================================
 
 async function notionContextOlustur() {
@@ -469,53 +469,123 @@ async function notionContextOlustur() {
       }
     }
 
+    const tekrarIsler = await tekrarEdenIsleriGetir();
+    if (tekrarIsler.length > 0) {
+      context += `\nTekrar eden işler (${tekrarIsler.length}):\n`;
+      for (const is of tekrarIsler) {
+        const baslik = notionMetinAl(is.properties['İş Başlığı']);
+        const tip = notionMetinAl(is.properties['TEKRAR_TİPİ']);
+        const gun = notionMetinAl(is.properties['TEKRAR_GÜNÜ']);
+        const saat = notionMetinAl(is.properties['TEKRAR_SAATİ']);
+        context += `- ${baslik} | ${tip} ${gun} ${saat}\n`;
+      }
+    }
+
     return context;
   } catch (e) {
     return 'Notion verisi alınamadı.';
   }
 }
 
-async function geminiCevapAl(chatId, kullaniciMesaji) {
+async function haydarCalistir(chatId, kullaniciMesaji) {
   const notionContext = await notionContextOlustur();
+  const acikIsler = await acikIsleriGetir();
 
-  const sistemPrompt = `Sen bir iş takip asistanısın. Ekibin Telegram botunda çalışıyorsun.
-Türkçe konuş, samimi ve kısa cevaplar ver.
-Notion'daki güncel veriler:
+  const acikIsListesi = acikIsler.map((is, i) => {
+    const baslik = notionMetinAl(is.properties['İş Başlığı']);
+    const oncelik = notionMetinAl(is.properties['ÖNCELİK']);
+    const sorumlu = notionMetinAl(is.properties['SORUMLU']);
+    return `${i + 1}. [${oncelik}] ${baslik} | Sorumlu: ${sorumlu}`;
+  }).join('\n');
+
+  const sistemPrompt = `Sen Haydar'sın. Bir iş takip botunun yapay zeka asistanısın. Türkçe konuşursun, samimi ve kısasın.
+
+Mevcut durum:
 ${notionContext}
-Kullanıcı sana işler hakkında soru sorabilir, yorum yapabilir veya sadece sohbet edebilir.`;
 
-  if (!kullaniciDurum[chatId].mesajlar) {
-    kullaniciDurum[chatId].mesajlar = [];
+Açık işlerin numaralı listesi (tamamlama/iptal için kullan):
+${acikIsListesi || 'Açık iş yok'}
+
+Kullanıcının isteğini analiz et ve aşağıdaki JSON formatında cevap ver. SADECE JSON döndür, başka hiçbir şey yazma:
+
+{
+  "aksiyon": "AKSIYON_ADI",
+  "mesaj": "Kullanıcıya söylenecek samimi kısa mesaj",
+  "parametreler": {}
+}
+
+Kullanılabilir aksiyonlar:
+- "LISTELE" → açık işleri listele. parametreler: {}
+- "IS_AC" → yeni iş aç. parametreler: { "isAdi": "...", "oncelik": "KRİTİK|YÜKSEK|NORMAL|BEKLEMEDE", "sorumlu": "...", "deadline": "GG.AA.YYYY SS:DD veya yok", "altMaddeler": "madde1,madde2 veya yok" }
+- "TAMAMLA" → işi tamamla. parametreler: { "isNo": 1 } (listeden numara)
+- "IPTAL" → açık işi iptal et/sil. parametreler: { "isNo": 1 }
+- "SOHBET" → sadece konuş, işlem yapma. parametreler: {}
+
+Eğer kullanıcı bir iş tamamlamak veya iptal etmek istiyorsa ama hangi iş olduğu net değilse, en mantıklı eşleşmeyi seç.
+Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.`;
+
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const result = await model.generateContent([
+    { role: 'user', parts: [{ text: sistemPrompt + '\n\nKullanıcı mesajı: ' + kullaniciMesaji }] }
+  ]);
+
+  const rawCevap = result.response.text().replace(/```json|```/g, '').trim();
+
+  let parsed;
+  try {
+    parsed = JSON.parse(rawCevap);
+  } catch (e) {
+    return { aksiyon: 'SOHBET', mesaj: rawCevap, parametreler: {} };
   }
 
-  kullaniciDurum[chatId].mesajlar.push({
-    role: 'user',
-    parts: [{ text: kullaniciMesaji }]
-  });
+  return parsed;
+}
 
-  // Geçmişi max 20 mesajla sınırla
-  if (kullaniciDurum[chatId].mesajlar.length > 20) {
-    kullaniciDurum[chatId].mesajlar = kullaniciDurum[chatId].mesajlar.slice(-20);
+async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
+  const { aksiyon, mesaj, parametreler } = parsed;
+
+  if (aksiyon === 'LISTELE') {
+    await mesajGonder(chatId, mesaj);
+    const isler = await acikIsleriGetir();
+    if (isler.length === 0) {
+      await mesajGonder(chatId, '🎉 Açık iş yok, her şey temiz!');
+      return;
+    }
+    let liste = `📋 <b>AÇIK İŞLER (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
+    for (const is of isler) {
+      const baslik = notionMetinAl(is.properties['İş Başlığı']);
+      const oncelik = notionMetinAl(is.properties['ÖNCELİK']);
+      const sorumlu = notionMetinAl(is.properties['SORUMLU']);
+      const deadline = notionMetinAl(is.properties['Deanline']);
+      liste += `${oncelikEmoji(oncelik)} <b>${baslik}</b>\n👤 ${sorumlu} ⏰ ${deadline}\n\n`;
+    }
+    await mesajGonder(chatId, liste);
+
+  } else if (aksiyon === 'IS_AC') {
+    await mesajGonder(chatId, mesaj);
+    const { isAdi, oncelik, sorumlu, deadline, altMaddeler } = parametreler;
+    await yeniIsOlustur(isAdi, oncelik || 'NORMAL', sorumlu || 'Belirsiz', deadline || 'yok', altMaddeler || 'yok');
+    const deadlineMetin = (!deadline || deadline === 'yok') ? 'Deadline yok' : deadline;
+    await bot.sendMessage(CHAT_ID, `🆕 <b>YENİ İŞ AÇILDI</b>\n━━━━━━━━━━━━━━━\n\n${oncelikEmoji(oncelik)} <b>${isAdi}</b>\n👤 ${sorumlu || 'Belirsiz'}\n⏰ ${deadlineMetin}\n\n🤖 Haydar tarafından açıldı`, { parse_mode: 'HTML' });
+
+  } else if (aksiyon === 'TAMAMLA') {
+    const isNo = (parametreler.isNo || 1) - 1;
+    if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
+    const secilenIs = acikIsler[isNo];
+    await isGuncelle(secilenIs.id, { 'DURUM': { select: { name: 'BİTTİ' } } });
+    await mesajGonder(chatId, mesaj);
+    await bitenIsBildirimiGonder(secilenIs.id);
+
+  } else if (aksiyon === 'IPTAL') {
+    const isNo = (parametreler.isNo || 1) - 1;
+    if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
+    const secilenIs = acikIsler[isNo];
+    await notion.pages.update({ page_id: secilenIs.id, archived: true });
+    await mesajGonder(chatId, mesaj);
+
+  } else {
+    await mesajGonder(chatId, mesaj);
   }
-
-  const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash',
-    systemInstruction: sistemPrompt
-  });
-
-  const chat = model.startChat({
-    history: kullaniciDurum[chatId].mesajlar.slice(0, -1)
-  });
-
-  const result = await chat.sendMessage(kullaniciMesaji);
-  const cevap = result.response.text();
-
-  kullaniciDurum[chatId].mesajlar.push({
-    role: 'model',
-    parts: [{ text: cevap }]
-  });
-
-  return cevap;
 }
 
 // =========================================
@@ -691,14 +761,8 @@ bot.onText(/\/iptal/, async (msg) => {
   await mesajGonder(msg.chat.id, '❌ İşlem iptal edildi.', { remove_keyboard: true });
 });
 
-bot.onText(/\/ai/, async (msg) => {
-  const chatId = msg.chat.id;
-  kullaniciDurum[chatId] = { adim: 'ai_sohbet', mesajlar: [] };
-  await mesajGonder(chatId, '🤖 <b>AI Asistan aktif</b>\n━━━━━━━━━━━━━━━\n\nMerhaba! İşler, shiftler veya aklına takılan herhangi bir şey hakkında konuşabiliriz.\n\nÇıkmak için /iptal yaz.');
-});
-
 bot.onText(/\/yardim|\/start/, async (msg) => {
-  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>AI Asistan</b>\n/ai — Yapay zeka ile konuş\n\n❌ /iptal — İşlemi iptal et`;
+  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>Haydar (AI)</b>\n"Hey Haydar [istek]" — Haydar\'a seslen\n\n❌ /iptal — İşlemi iptal et`;
   await mesajGonder(msg.chat.id, metin);
 });
 
@@ -710,16 +774,43 @@ bot.on('message', async (msg) => {
   const chatId = msg.chat.id;
   const metin = msg.text || '';
   if (metin.startsWith('/')) return;
+
+  // Hey Haydar ile uyanır
+  if (/^hey haydar/i.test(metin)) {
+    const istek = metin.replace(/^hey haydar[,!]?\s*/i, '').trim();
+    kullaniciDurum[chatId] = { adim: 'haydar_aktif' };
+    if (!istek) {
+      await mesajGonder(chatId, '👋 Buyur? Ne yapayım?');
+      return;
+    }
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const acikIsler = await acikIsleriGetir();
+      const parsed = await haydarCalistir(chatId, istek);
+      await haydarAksiyonUygula(chatId, parsed, acikIsler);
+    } catch (e) {
+      await mesajGonder(chatId, '❌ Haydar hatası: ' + e.message);
+    }
+    return;
+  }
+
   const durum = kullaniciDurum[chatId];
   if (!durum) return;
 
-  if (durum.adim === 'ai_sohbet') {
+  // Haydar aktifse her mesajı işle
+  if (durum.adim === 'haydar_aktif') {
+    if (/haydar kapat|haydar kapanabilirsin|kapan haydar/i.test(metin)) {
+      delete kullaniciDurum[chatId];
+      await mesajGonder(chatId, '👋 Tamam, görüşürüz!');
+      return;
+    }
     try {
       await bot.sendChatAction(chatId, 'typing');
-      const cevap = await geminiCevapAl(chatId, metin);
-      await mesajGonder(chatId, cevap);
+      const acikIsler = await acikIsleriGetir();
+      const parsed = await haydarCalistir(chatId, metin);
+      await haydarAksiyonUygula(chatId, parsed, acikIsler);
     } catch (e) {
-      await mesajGonder(chatId, '❌ AI hatası: ' + e.message);
+      await mesajGonder(chatId, '❌ Haydar hatası: ' + e.message);
     }
     return;
   }

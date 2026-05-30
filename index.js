@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
-const { GoogleGenerativeAI } = require('@google/generative-ai');
+const { Mistral } = require('@mistralai/mistralai');
 
 const TOKEN = process.env.BOT_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -9,11 +9,11 @@ const ARSIV_DATABASE_ID = process.env.ARSIV_DATABASE_ID;
 const TEKRAR_DATABASE_ID = process.env.TEKRAR_DATABASE_ID;
 const SHIFT_DATABASE_ID = process.env.SHIFT_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
-const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
+const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
-const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
+const mistral = new Mistral({ apiKey: MISTRAL_API_KEY });
 
 const kullaniciDurum = {};
 
@@ -506,7 +506,7 @@ ${notionContext}
 Açık işlerin numaralı listesi (tamamlama/iptal için kullan):
 ${acikIsListesi || 'Açık iş yok'}
 
-Kullanıcının isteğini analiz et ve aşağıdaki JSON formatında cevap ver. SADECE JSON döndür, başka hiçbir şey yazma:
+Kullanıcının isteğini analiz et ve aşağıdaki JSON formatında cevap ver. SADECE JSON döndür, başka hiçbir şey yazma, markdown kullanma:
 
 {
   "aksiyon": "AKSIYON_ADI",
@@ -522,21 +522,35 @@ Kullanılabilir aksiyonlar:
 - "SOHBET" → sadece konuş, işlem yapma. parametreler: {}
 
 Eğer kullanıcı bir iş tamamlamak veya iptal etmek istiyorsa ama hangi iş olduğu net değilse, en mantıklı eşleşmeyi seç.
-Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.`;
+Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.
+TEKRAR EDİYORUM: Sadece ham JSON döndür. Hiçbir açıklama, hiçbir markdown, sadece { } içinde JSON.`;
 
-  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
-  const result = await model.generateContent(sistemPrompt + '\n\nKullanıcı mesajı: ' + kullaniciMesaji);
-
-  const rawCevap = result.response.text().replace(/```json|```/g, '').trim();
-
-  let parsed;
   try {
-    parsed = JSON.parse(rawCevap);
-  } catch (e) {
-    return { aksiyon: 'SOHBET', mesaj: rawCevap, parametreler: {} };
-  }
+    const response = await mistral.chat.complete({
+      model: 'mistral-small-latest',
+      messages: [
+        { role: 'system', content: sistemPrompt },
+        { role: 'user', content: kullaniciMesaji }
+      ],
+      temperature: 0.1,
+      responseFormat: { type: 'json_object' }
+    });
 
-  return parsed;
+    const rawCevap = response.choices[0].message.content
+      .replace(/```json|```/g, '').trim();
+
+    let parsed;
+    try {
+      parsed = JSON.parse(rawCevap);
+    } catch (e) {
+      return { aksiyon: 'SOHBET', mesaj: rawCevap, parametreler: {} };
+    }
+
+    return parsed;
+  } catch (e) {
+    console.error('Mistral hatası:', e.message);
+    throw e;
+  }
 }
 
 async function haydarAksiyonUygula(chatId, parsed, acikIsler) {

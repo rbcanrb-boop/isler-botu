@@ -1,5 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const TOKEN = process.env.BOT_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -8,9 +9,11 @@ const ARSIV_DATABASE_ID = process.env.ARSIV_DATABASE_ID;
 const TEKRAR_DATABASE_ID = process.env.TEKRAR_DATABASE_ID;
 const SHIFT_DATABASE_ID = process.env.SHIFT_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 const kullaniciDurum = {};
 
@@ -439,6 +442,83 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
 }
 
 // =========================================
+//   GEMINI AI FONKSİYONLARI
+// =========================================
+
+async function notionContextOlustur() {
+  try {
+    const acikIsler = await acikIsleriGetir();
+    const shiftData = await buHaftanınShiftiniGetir();
+    const mesaideOlanlar = suAnMesaideKimVar(shiftData);
+    const trSimdi = new Date(new Date().getTime() + 3 * 60 * 60 * 1000);
+    const saatStr = `${String(trSimdi.getUTCHours()).padStart(2, '0')}:${String(trSimdi.getUTCMinutes()).padStart(2, '0')}`;
+
+    let context = `Bugün: ${bugunTarih()}, Saat: ${saatStr}\n`;
+    context += `Şu an mesaide: ${mesaideOlanlar.length > 0 ? mesaideOlanlar.join(', ') : 'Belirsiz'}\n\n`;
+
+    if (acikIsler.length === 0) {
+      context += 'Açık iş yok.\n';
+    } else {
+      context += `Açık işler (${acikIsler.length}):\n`;
+      for (const is of acikIsler) {
+        const baslik = notionMetinAl(is.properties['İş Başlığı']);
+        const oncelik = notionMetinAl(is.properties['ÖNCELİK']);
+        const sorumlu = notionMetinAl(is.properties['SORUMLU']);
+        const deadline = notionMetinAl(is.properties['Deanline']);
+        context += `- [${oncelik}] ${baslik} | Sorumlu: ${sorumlu} | Deadline: ${deadline}\n`;
+      }
+    }
+
+    return context;
+  } catch (e) {
+    return 'Notion verisi alınamadı.';
+  }
+}
+
+async function geminiCevapAl(chatId, kullaniciMesaji) {
+  const notionContext = await notionContextOlustur();
+
+  const sistemPrompt = `Sen bir iş takip asistanısın. Ekibin Telegram botunda çalışıyorsun.
+Türkçe konuş, samimi ve kısa cevaplar ver.
+Notion'daki güncel veriler:
+${notionContext}
+Kullanıcı sana işler hakkında soru sorabilir, yorum yapabilir veya sadece sohbet edebilir.`;
+
+  if (!kullaniciDurum[chatId].mesajlar) {
+    kullaniciDurum[chatId].mesajlar = [];
+  }
+
+  kullaniciDurum[chatId].mesajlar.push({
+    role: 'user',
+    parts: [{ text: kullaniciMesaji }]
+  });
+
+  // Geçmişi max 20 mesajla sınırla
+  if (kullaniciDurum[chatId].mesajlar.length > 20) {
+    kullaniciDurum[chatId].mesajlar = kullaniciDurum[chatId].mesajlar.slice(-20);
+  }
+
+  const model = genAI.getGenerativeModel({
+    model: 'gemini-2.0-flash',
+    systemInstruction: sistemPrompt
+  });
+
+  const chat = model.startChat({
+    history: kullaniciDurum[chatId].mesajlar.slice(0, -1)
+  });
+
+  const result = await chat.sendMessage(kullaniciMesaji);
+  const cevap = result.response.text();
+
+  kullaniciDurum[chatId].mesajlar.push({
+    role: 'model',
+    parts: [{ text: cevap }]
+  });
+
+  return cevap;
+}
+
+// =========================================
 //   TELEGRAM KOMUTLARI
 // =========================================
 
@@ -611,8 +691,14 @@ bot.onText(/\/iptal/, async (msg) => {
   await mesajGonder(msg.chat.id, '❌ İşlem iptal edildi.', { remove_keyboard: true });
 });
 
+bot.onText(/\/ai/, async (msg) => {
+  const chatId = msg.chat.id;
+  kullaniciDurum[chatId] = { adim: 'ai_sohbet', mesajlar: [] };
+  await mesajGonder(chatId, '🤖 <b>AI Asistan aktif</b>\n━━━━━━━━━━━━━━━\n\nMerhaba! İşler, shiftler veya aklına takılan herhangi bir şey hakkında konuşabiliriz.\n\nÇıkmak için /iptal yaz.');
+});
+
 bot.onText(/\/yardim|\/start/, async (msg) => {
-  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n❌ /iptal — İşlemi iptal et`;
+  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>AI Asistan</b>\n/ai — Yapay zeka ile konuş\n\n❌ /iptal — İşlemi iptal et`;
   await mesajGonder(msg.chat.id, metin);
 });
 
@@ -626,6 +712,17 @@ bot.on('message', async (msg) => {
   if (metin.startsWith('/')) return;
   const durum = kullaniciDurum[chatId];
   if (!durum) return;
+
+  if (durum.adim === 'ai_sohbet') {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const cevap = await geminiCevapAl(chatId, metin);
+      await mesajGonder(chatId, cevap);
+    } catch (e) {
+      await mesajGonder(chatId, '❌ AI hatası: ' + e.message);
+    }
+    return;
+  }
 
   if (durum.adim?.startsWith('tekrar_')) {
     await tekrarEdenIsEkle(chatId, durum, metin);

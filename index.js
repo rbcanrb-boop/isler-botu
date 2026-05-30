@@ -499,7 +499,7 @@ Kullanıcı sana işler hakkında soru sorabilir, yorum yapabilir veya sadece so
   }
 
   const model = genAI.getGenerativeModel({
-    model: 'gemini-2.5-flash-preview-05-20',
+    model: 'gemini-2.5-flash-preview-0520',
     systemInstruction: sistemPrompt
   });
 

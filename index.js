@@ -1,3 +1,10 @@
+process.on('uncaughtException', (err) => {
+  console.error('UNCAUGHT EXCEPTION:', err.message, err.stack);
+});
+
+process.on('unhandledRejection', (reason) => {
+  console.error('UNHANDLED REJECTION:', reason);
+});
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
 const { Mistral } = require('@mistralai/mistralai');

@@ -68,7 +68,7 @@ function tarihFormat(tarihStr) {
 }
 
 function bugunTarih() {
-  const d = new Date();
+  const d = trSimdi();
   return `${String(d.getDate()).padStart(2, '0')}.${String(d.getMonth() + 1).padStart(2, '0')}.${d.getFullYear()}`;
 }
 
@@ -136,22 +136,38 @@ async function acikIsleriGetir(oncelikFiltre = null) {
   return response.results;
 }
 
+// =========================================
+//   DÜZELTİLDİ: Tamamlanma Tarihi alanına göre filtrele
+// =========================================
 async function bitenIsleriGetir(tarihStr = null) {
   let hedefTarih;
+
   if (tarihStr) {
     const p = tarihStr.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
     if (p) hedefTarih = `${p[3]}-${p[2].padStart(2, '0')}-${p[1].padStart(2, '0')}`;
   }
+
   if (!hedefTarih) {
-    const bugun = new Date();
-    hedefTarih = `${bugun.getFullYear()}-${String(bugun.getMonth() + 1).padStart(2, '0')}-${String(bugun.getDate()).padStart(2, '0')}`;
+    const tr = trSimdi();
+    hedefTarih = `${tr.getFullYear()}-${String(tr.getMonth() + 1).padStart(2, '0')}-${String(tr.getDate()).padStart(2, '0')}`;
   }
+
+  const baslangic = `${hedefTarih}T00:00:00.000+03:00`;
+  const bitis = `${hedefTarih}T23:59:59.999+03:00`;
+
   const response = await notion.databases.query({
     database_id: DATABASE_ID,
-    filter: { property: 'DURUM', select: { equals: 'BİTTİ' } },
-    sorts: [{ timestamp: 'last_edited_time', direction: 'descending' }]
+    filter: {
+      and: [
+        { property: 'DURUM', select: { equals: 'BİTTİ' } },
+        { property: 'Tamamlanma Tarihi', date: { on_or_after: baslangic } },
+        { property: 'Tamamlanma Tarihi', date: { on_or_before: bitis } }
+      ]
+    },
+    sorts: [{ property: 'Tamamlanma Tarihi', direction: 'descending' }]
   });
-  return response.results.filter(is => is.last_edited_time?.startsWith(hedefTarih));
+
+  return response.results;
 }
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
@@ -178,10 +194,25 @@ async function isGuncelle(pageId, properties) {
   return await notion.pages.update({ page_id: pageId, properties });
 }
 
+// =========================================
+//   YENİ FONKSİYON: İş tamamla + Tamamlanma Tarihi kaydet
+// =========================================
+async function isTamamla(pageId) {
+  const trSu = trSimdi();
+  return await notion.pages.update({
+    page_id: pageId,
+    properties: {
+      'DURUM': { select: { name: 'BİTTİ' } },
+      'Tamamlanma Tarihi': { date: { start: trSu.toISOString() } }
+    }
+  });
+}
+
 async function isArsivle(page) {
   const baslik = notionMetinAl(page.properties['İş Başlığı']);
   const oncelik = notionMetinAl(page.properties['ÖNCELİK']);
   const sorumlu = notionMetinAl(page.properties['SORUMLU']);
+  const tamamlanmaTarihi = page.properties['Tamamlanma Tarihi']?.date?.start || new Date().toISOString();
   await notion.pages.create({
     parent: { database_id: ARSIV_DATABASE_ID },
     properties: {
@@ -189,7 +220,8 @@ async function isArsivle(page) {
       'DURUM': { select: { name: 'BİTTİ' } },
       'ÖNCELİK': { select: { name: oncelik === '-' ? 'NORMAL' : oncelik } },
       'SORUMLU': { rich_text: [{ text: { content: sorumlu === '-' ? '' : sorumlu } }] },
-      'Arşivlenme Tarihi': { date: { start: new Date().toISOString() } }
+      'Arşivlenme Tarihi': { date: { start: new Date().toISOString() } },
+      'Tamamlanma Tarihi': { date: { start: tamamlanmaTarihi } }
     }
   });
   await notion.pages.update({ page_id: page.id, archived: true });
@@ -435,12 +467,14 @@ async function yuksekIsleriiBildir() {
 // =========================================
 
 async function tumVeriCek() {
-  const [acikIsler, bitenIsler, tekrarIsler, shiftData] = await Promise.all([
+  const [acikIsler, tekrarIsler, shiftData] = await Promise.all([
     acikIsleriGetir().catch(() => []),
-    bitenIsleriGetir().catch(() => []),
     tekrarEdenIsleriGetir().catch(() => []),
     buHaftanınShiftiniGetir().catch(() => null)
   ]);
+
+  // Biten işleri ayrı çek (bugün için)
+  const bitenIsler = await bitenIsleriGetir().catch(() => []);
 
   const mesaideOlanlar = suAnMesaideKimVar(shiftData);
   const tr = trSimdi();
@@ -472,7 +506,8 @@ async function tumVeriCek() {
     bitenIsler.forEach((is, i) => {
       const baslik = notionMetinAl(is.properties['İş Başlığı']);
       const sorumlu = notionMetinAl(is.properties['SORUMLU']);
-      context += `${i + 1}. ${baslik} | Sorumlu: ${sorumlu}\n`;
+      const tamamlanma = notionMetinAl(is.properties['Tamamlanma Tarihi']);
+      context += `${i + 1}. ${baslik} | Sorumlu: ${sorumlu} | Tamamlanma: ${tamamlanma}\n`;
     });
   }
 
@@ -520,6 +555,7 @@ KİŞİLİĞİN:
 YETKİLERİN:
 - Açık işleri listeleyebilirsin
 - Bugün biten işleri görebilirsin
+- Belirli bir tarihe ait biten işleri görebilirsin
 - Yeni iş açabilirsin
 - İş tamamlayabilirsin
 - İşi iptal edip silebilirsin
@@ -544,7 +580,7 @@ Her zaman şu JSON formatında yanıt ver, SADECE JSON, başka hiçbir şey yazm
 AKSIYONLAR:
 - "YOK" → sadece konuş, işlem yapma
 - "LISTELE_ACIK" → açık işleri listele
-- "LISTELE_BITEN" → bugün biten işleri listele
+- "LISTELE_BITEN" → biten işleri listele. Tarih belirtilmişse parametreler: { "tarih": "GG.AA.YYYY" }, belirtilmemişse bugünü kullan
 - "LISTELE_TEKRAR" → tekrar eden işleri listele
 - "IS_AC" → parametreler: { "isAdi": "...", "oncelik": "KRİTİK|YÜKSEK|NORMAL|BEKLEMEDE", "sorumlu": "...", "deadline": "GG.AA.YYYY SS:DD veya yok", "altMaddeler": "madde1,madde2 veya yok" }
 - "IS_TAMAMLA" → parametreler: { "isNo": 1 }
@@ -555,7 +591,8 @@ KURALLAR:
 - Kullanıcı hangi işi kastettiğini net söylemediyse, en mantıklı eşleşmeyi seç ve mesajında belirt
 - Öncelik belirtilmemişse NORMAL kullan
 - Sorumlu belirtilmemişse şu an mesaidekileri yaz, yoksa "Belirsiz"
-- Konuşma geçmişini takip et, önceki mesajlara atıf yapabilirsin`;
+- Konuşma geçmişini takip et, önceki mesajlara atıf yapabilirsin
+- Biten işleri sorgularken context'teki "BUGÜN BİTEN İŞLER" verisini kullan`;
 
   const response = await mistral.chat.complete({
     model: 'mistral-large-latest',
@@ -603,14 +640,18 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
     await mesajGonder(chatId, liste);
 
   } else if (aksiyon === 'LISTELE_BITEN') {
-    const isler = await bitenIsleriGetir();
+    // Tarih parametresi varsa onu kullan, yoksa bugün
+    const tarihParam = parametreler?.tarih || null;
+    const isler = await bitenIsleriGetir(tarihParam);
+    const tarihGoster = tarihParam || bugunTarih();
     if (isler.length === 0) {
-      await mesajGonder(chatId, `📭 Bugün biten iş yok.`);
+      await mesajGonder(chatId, `📭 ${tarihGoster} tarihinde biten iş yok.`);
       return;
     }
-    let liste = `📋 <b>BUGÜN BİTEN İŞLER (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
+    let liste = `📋 <b>BİTEN İŞLER — ${tarihGoster} (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
     for (const is of isler) {
-      liste += `${oncelikEmoji(notionMetinAl(is.properties['ÖNCELİK']))} <b>${notionMetinAl(is.properties['İş Başlığı'])}</b>\n👤 ${notionMetinAl(is.properties['SORUMLU'])}\n\n`;
+      const tamamlanma = notionMetinAl(is.properties['Tamamlanma Tarihi']);
+      liste += `${oncelikEmoji(notionMetinAl(is.properties['ÖNCELİK']))} <b>${notionMetinAl(is.properties['İş Başlığı'])}</b>\n👤 ${notionMetinAl(is.properties['SORUMLU'])}\n🕐 ${tamamlanma}\n\n`;
     }
     await mesajGonder(chatId, liste);
 
@@ -639,7 +680,8 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
   } else if (aksiyon === 'IS_TAMAMLA') {
     const isNo = (parametreler.isNo || 1) - 1;
     if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
-    await isGuncelle(acikIsler[isNo].id, { 'DURUM': { select: { name: 'BİTTİ' } } });
+    // DÜZELTİLDİ: isTamamla kullan
+    await isTamamla(acikIsler[isNo].id);
     await bitenIsBildirimiGonder(acikIsler[isNo].id);
 
   } else if (aksiyon === 'IS_IPTAL') {
@@ -734,7 +776,10 @@ bot.onText(/\/biten(.*)/, async (msg, match) => {
     const tarihGoster = tarihParam || bugunTarih();
     if (isler.length === 0) { await mesajGonder(chatId, `📋 <b>BİTEN İŞLER — ${tarihGoster}</b>\n━━━━━━━━━━━━━━━\n\n📭 Bu tarihte biten iş yok.`); return; }
     let metin = `📋 <b>BİTEN İŞLER — ${tarihGoster} (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
-    for (const is of isler) metin += `${oncelikEmoji(notionMetinAl(is.properties['ÖNCELİK']))} <b>${notionMetinAl(is.properties['İş Başlığı'])}</b>\n👤 ${notionMetinAl(is.properties['SORUMLU'])}\n\n`;
+    for (const is of isler) {
+      const tamamlanma = notionMetinAl(is.properties['Tamamlanma Tarihi']);
+      metin += `${oncelikEmoji(notionMetinAl(is.properties['ÖNCELİK']))} <b>${notionMetinAl(is.properties['İş Başlığı'])}</b>\n👤 ${notionMetinAl(is.properties['SORUMLU'])}\n🕐 ${tamamlanma}\n\n`;
+    }
     await mesajGonder(chatId, metin);
   } catch (e) { await mesajGonder(chatId, '❌ Hata: ' + e.message); }
 });
@@ -898,7 +943,8 @@ bot.on('message', async (msg) => {
     const maddeler = altMaddeleriParse(notionMetinAl(secilenIs.properties['NOTLAR']));
     if (maddeler.length === 0) {
       delete kullaniciDurum[chatId];
-      await isGuncelle(secilenIs.id, { 'DURUM': { select: { name: 'BİTTİ' } } });
+      // DÜZELTİLDİ: isTamamla kullan
+      await isTamamla(secilenIs.id);
       await bitenIsBildirimiGonder(secilenIs.id);
       return;
     }
@@ -911,7 +957,8 @@ bot.on('message', async (msg) => {
     const { secilenIs, baslik, maddeler } = durum;
     if (metin.toLowerCase() === 'bitir') {
       delete kullaniciDurum[chatId];
-      await isGuncelle(secilenIs.id, { 'DURUM': { select: { name: 'BİTTİ' } } });
+      // DÜZELTİLDİ: isTamamla kullan
+      await isTamamla(secilenIs.id);
       await bitenIsBildirimiGonder(secilenIs.id);
       return;
     }
@@ -922,13 +969,16 @@ bot.on('message', async (msg) => {
     }
     const yeniNotlar = altMaddeleriYaz(maddeler);
     const hepsiTamam = maddeler.every(m => m.tamamlandi);
-    const updateProps = { 'NOTLAR': { rich_text: [{ text: { content: yeniNotlar } }] } };
-    if (hepsiTamam) updateProps['DURUM'] = { select: { name: 'BİTTİ' } };
-    await isGuncelle(secilenIs.id, updateProps);
-    delete kullaniciDurum[chatId];
+
     if (hepsiTamam) {
+      // DÜZELTİLDİ: önce NOTLAR güncelle, sonra isTamamla ile BİTTİ + tarih kaydet
+      await isGuncelle(secilenIs.id, { 'NOTLAR': { rich_text: [{ text: { content: yeniNotlar } }] } });
+      await isTamamla(secilenIs.id);
+      delete kullaniciDurum[chatId];
       await bitenIsBildirimiGonder(secilenIs.id);
     } else {
+      await isGuncelle(secilenIs.id, { 'NOTLAR': { rich_text: [{ text: { content: yeniNotlar } }] } });
+      delete kullaniciDurum[chatId];
       const tamamlanan = maddeler.filter(m => m.tamamlandi).length;
       let duzenliMetin = `📋 <b>${baslik}</b> güncellendi\n━━━━━━━━━━━━━━━\n\n`;
       maddeler.forEach((m, i) => duzenliMetin += `${i + 1}. ${m.tamamlandi ? '☑' : '☐'} ${m.metin}\n`);

@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
-const { Mistral } = require('@mistralai/mistralai');
+const OpenAI = require('openai');
 
 const TOKEN = process.env.BOT_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -9,11 +9,11 @@ const ARSIV_DATABASE_ID = process.env.ARSIV_DATABASE_ID;
 const TEKRAR_DATABASE_ID = process.env.TEKRAR_DATABASE_ID;
 const SHIFT_DATABASE_ID = process.env.SHIFT_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
-const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
+const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
-const mistral = new Mistral({ apiKey: MISTRAL_API_KEY });
+const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
 
 const kullaniciDurum = {};
 
@@ -506,7 +506,7 @@ ${notionContext}
 Açık işlerin numaralı listesi (tamamlama/iptal için kullan):
 ${acikIsListesi || 'Açık iş yok'}
 
-Kullanıcının isteğini analiz et ve aşağıdaki JSON formatında cevap ver. SADECE JSON döndür, başka hiçbir şey yazma, markdown kullanma:
+Kullanıcının isteğini analiz et ve aşağıdaki JSON formatında cevap ver. SADECE JSON döndür, başka hiçbir şey yazma:
 
 {
   "aksiyon": "AKSIYON_ADI",
@@ -522,35 +522,27 @@ Kullanılabilir aksiyonlar:
 - "SOHBET" → sadece konuş, işlem yapma. parametreler: {}
 
 Eğer kullanıcı bir iş tamamlamak veya iptal etmek istiyorsa ama hangi iş olduğu net değilse, en mantıklı eşleşmeyi seç.
-Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.
-TEKRAR EDİYORUM: Sadece ham JSON döndür. Hiçbir açıklama, hiçbir markdown, sadece { } içinde JSON.`;
+Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.`;
 
+  const completion = await openai.chat.completions.create({
+    model: 'gpt-4o',
+    messages: [
+      { role: 'system', content: sistemPrompt },
+      { role: 'user', content: kullaniciMesaji }
+    ],
+    response_format: { type: 'json_object' }
+  });
+
+  const rawCevap = completion.choices[0].message.content.trim();
+
+  let parsed;
   try {
-    const response = await mistral.chat.complete({
-      model: 'mistral-small-latest',
-      messages: [
-        { role: 'system', content: sistemPrompt },
-        { role: 'user', content: kullaniciMesaji }
-      ],
-      temperature: 0.1,
-      responseFormat: { type: 'json_object' }
-    });
-
-    const rawCevap = response.choices[0].message.content
-      .replace(/```json|```/g, '').trim();
-
-    let parsed;
-    try {
-      parsed = JSON.parse(rawCevap);
-    } catch (e) {
-      return { aksiyon: 'SOHBET', mesaj: rawCevap, parametreler: {} };
-    }
-
-    return parsed;
+    parsed = JSON.parse(rawCevap);
   } catch (e) {
-    console.error('Mistral hatası:', e.message);
-    throw e;
+    return { aksiyon: 'SOHBET', mesaj: rawCevap, parametreler: {} };
   }
+
+  return parsed;
 }
 
 async function haydarAksiyonUygula(chatId, parsed, acikIsler) {

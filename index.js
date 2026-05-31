@@ -1028,7 +1028,7 @@ bot.onText(/\/iptal/, async (msg) => {
 });
 
 bot.onText(/\/yardim|\/start/, async (msg) => {
-  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>Haydar (AI)</b>\n"Hey Haydar [istek]" — Haydar'a seslen\n"Haydar kapanabilirsin" — Haydar'ı kapat\n\n❌ /iptal — İşlemi iptal et`;
+  const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>Haydar (AI)</b>\n"haydar [istek]" — Haydar'a seslen\n"Haydar kapanabilirsin" — Haydar'ı kapat\n\n❌ /iptal — İşlemi iptal et`;
   await mesajGonder(msg.chat.id, metin);
 });
 
@@ -1041,9 +1041,9 @@ bot.on('message', async (msg) => {
   const metin = msg.text || '';
   if (metin.startsWith('/')) return;
 
-  // Hey Haydar ile uyanır
-  if (/^hey haydar/i.test(metin)) {
-    const istek = metin.replace(/^hey haydar[,!]?\s*/i, '').trim();
+  // haydar ile uyanır
+  if (/^haydar/i.test(metin)) {
+    const istek = metin.replace(/^haydar[,!]?\s*/i, '').trim();
     if (!kullaniciDurum[chatId] || kullaniciDurum[chatId].adim !== 'haydar_aktif') {
       kullaniciDurum[chatId] = { adim: 'haydar_aktif', gecmis: [] };
     }
@@ -1081,7 +1081,7 @@ bot.on('message', async (msg) => {
   if (kullaniciDurum[chatId]?.adim === 'haydar_aktif') {
     if (/haydar kapat|haydar kapanabilirsin|kapan haydar|görüşürüz haydar/i.test(metin)) {
       delete kullaniciDurum[chatId];
-      await mesajGonder(chatId, '👋 Tamam, görüşürüz! Bir şey lazım olursa "Hey Haydar" de.');
+      await mesajGonder(chatId, '👋 Tamam, görüşürüz! Bir şey lazım olursa "haydar" de.');
       return;
     }
     try {

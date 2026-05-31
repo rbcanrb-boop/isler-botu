@@ -1,6 +1,6 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
-const OpenAI = require('openai');
+const { GoogleGenerativeAI } = require('@google/generative-ai');
 
 const TOKEN = process.env.BOT_TOKEN;
 const NOTION_TOKEN = process.env.NOTION_TOKEN;
@@ -9,11 +9,11 @@ const ARSIV_DATABASE_ID = process.env.ARSIV_DATABASE_ID;
 const TEKRAR_DATABASE_ID = process.env.TEKRAR_DATABASE_ID;
 const SHIFT_DATABASE_ID = process.env.SHIFT_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
-const OPENAI_API_KEY = process.env.OPENAI_API_KEY;
+const GEMINI_API_KEY = process.env.GEMINI_API_KEY;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
-const openai = new OpenAI({ apiKey: OPENAI_API_KEY });
+const genAI = new GoogleGenerativeAI(GEMINI_API_KEY);
 
 const kullaniciDurum = {};
 
@@ -524,16 +524,10 @@ Kullanılabilir aksiyonlar:
 Eğer kullanıcı bir iş tamamlamak veya iptal etmek istiyorsa ama hangi iş olduğu net değilse, en mantıklı eşleşmeyi seç.
 Öncelik belirtilmemişse NORMAL kullan. Sorumlu belirtilmemişse "Belirsiz" yaz.`;
 
-  const completion = await openai.chat.completions.create({
-    model: 'gpt-4o',
-    messages: [
-      { role: 'system', content: sistemPrompt },
-      { role: 'user', content: kullaniciMesaji }
-    ],
-    response_format: { type: 'json_object' }
-  });
+  const model = genAI.getGenerativeModel({ model: 'gemini-2.5-flash' });
+  const result = await model.generateContent(sistemPrompt + '\n\nKullanıcı mesajı: ' + kullaniciMesaji);
 
-  const rawCevap = completion.choices[0].message.content.trim();
+  const rawCevap = result.response.text().replace(/```json|```/g, '').trim();
 
   let parsed;
   try {

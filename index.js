@@ -1,6 +1,7 @@
 const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
 const { Mistral } = require('@mistralai/mistralai');
+const { tavily } = require('@tavily/core');
 
 // =========================================
 //   ENV DEĞİŞKENLERİ
@@ -14,10 +15,12 @@ const TEKRAR_DATABASE_ID = process.env.TEKRAR_DATABASE_ID;
 const SHIFT_DATABASE_ID = process.env.SHIFT_DATABASE_ID;
 const CHAT_ID = process.env.CHAT_ID;
 const MISTRAL_API_KEY = process.env.MISTRAL_API_KEY;
+const TAVILY_API_KEY = process.env.TAVILY_API_KEY;
 
 const bot = new TelegramBot(TOKEN, { polling: true });
 const notion = new Client({ auth: NOTION_TOKEN });
 const mistral = new Mistral({ apiKey: MISTRAL_API_KEY });
+const tavilyClient = tavily({ apiKey: TAVILY_API_KEY });
 
 // Kullanıcı durumları (komut akışı + Haydar sohbet geçmişi)
 const kullaniciDurum = {};
@@ -125,6 +128,21 @@ async function mesajGonder(chatId, metin, klavye) {
 }
 
 // =========================================
+//   RETRY YARDIMCISI
+// =========================================
+
+async function retryAsync(fn, denemeSayisi = 2, bekleme = 1000) {
+  for (let i = 0; i < denemeSayisi; i++) {
+    try {
+      return await fn();
+    } catch (e) {
+      if (i === denemeSayisi - 1) throw e;
+      await new Promise(r => setTimeout(r, bekleme));
+    }
+  }
+}
+
+// =========================================
 //   NOTION FONKSİYONLARI
 // =========================================
 
@@ -132,42 +150,34 @@ async function acikIsleriGetir(oncelikFiltre = null) {
   const filter = oncelikFiltre
     ? { and: [{ property: 'DURUM', select: { equals: 'AÇIK' } }, { property: 'ÖNCELİK', select: { equals: oncelikFiltre } }] }
     : { property: 'DURUM', select: { equals: 'AÇIK' } };
-  const response = await notion.databases.query({ database_id: DATABASE_ID, filter });
-  return response.results;
+  return await retryAsync(() => notion.databases.query({ database_id: DATABASE_ID, filter }).then(r => r.results));
 }
 
-// =========================================
-//   DÜZELTİLDİ: Tamamlanma Tarihi alanına göre filtrele
-// =========================================
 async function bitenIsleriGetir(tarihStr = null) {
   let hedefTarih;
-
   if (tarihStr) {
     const p = tarihStr.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})/);
     if (p) hedefTarih = `${p[3]}-${p[2].padStart(2, '0')}-${p[1].padStart(2, '0')}`;
   }
-
   if (!hedefTarih) {
     const tr = trSimdi();
     hedefTarih = `${tr.getFullYear()}-${String(tr.getMonth() + 1).padStart(2, '0')}-${String(tr.getDate()).padStart(2, '0')}`;
   }
-
   const baslangic = `${hedefTarih}T00:00:00.000+03:00`;
   const bitis = `${hedefTarih}T23:59:59.999+03:00`;
-
-  const response = await notion.databases.query({
-    database_id: DATABASE_ID,
-    filter: {
-      and: [
-        { property: 'DURUM', select: { equals: 'BİTTİ' } },
-        { property: 'Tamamlanma Tarihi', date: { on_or_after: baslangic } },
-        { property: 'Tamamlanma Tarihi', date: { on_or_before: bitis } }
-      ]
-    },
-    sorts: [{ property: 'Tamamlanma Tarihi', direction: 'descending' }]
-  });
-
-  return response.results;
+  return await retryAsync(() =>
+    notion.databases.query({
+      database_id: DATABASE_ID,
+      filter: {
+        and: [
+          { property: 'DURUM', select: { equals: 'BİTTİ' } },
+          { property: 'Tamamlanma Tarihi', date: { on_or_after: baslangic } },
+          { property: 'Tamamlanma Tarihi', date: { on_or_before: bitis } }
+        ]
+      },
+      sorts: [{ property: 'Tamamlanma Tarihi', direction: 'descending' }]
+    }).then(r => r.results)
+  );
 }
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
@@ -180,32 +190,31 @@ async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
   if (deadline && deadline.toLowerCase() !== 'yok') {
     const p = deadline.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})/);
     if (p) {
-      properties['Deanline'] = { date: { start: `${p[3]}-${p[2].padStart(2,'0')}-${p[1].padStart(2,'0')}T${p[4].padStart(2,'0')}:${p[5]}:00` } };
+      properties['Deanline'] = { date: { start: `${p[3]}-${p[2].padStart(2, '0')}-${p[1].padStart(2, '0')}T${p[4].padStart(2, '0')}:${p[5]}:00` } };
     }
   }
   if (altMaddeler && altMaddeler.toLowerCase() !== 'yok') {
     const maddeler = altMaddeler.split(',').map(m => `☐ ${m.trim()}`).join('\n');
     properties['NOTLAR'] = { rich_text: [{ text: { content: maddeler } }] };
   }
-  return await notion.pages.create({ parent: { database_id: DATABASE_ID }, properties });
+  return await retryAsync(() => notion.pages.create({ parent: { database_id: DATABASE_ID }, properties }));
 }
 
 async function isGuncelle(pageId, properties) {
-  return await notion.pages.update({ page_id: pageId, properties });
+  return await retryAsync(() => notion.pages.update({ page_id: pageId, properties }));
 }
 
-// =========================================
-//   YENİ FONKSİYON: İş tamamla + Tamamlanma Tarihi kaydet
-// =========================================
 async function isTamamla(pageId) {
   const trSu = trSimdi();
-  return await notion.pages.update({
-    page_id: pageId,
-    properties: {
-      'DURUM': { select: { name: 'BİTTİ' } },
-      'Tamamlanma Tarihi': { date: { start: trSu.toISOString() } }
-    }
-  });
+  return await retryAsync(() =>
+    notion.pages.update({
+      page_id: pageId,
+      properties: {
+        'DURUM': { select: { name: 'BİTTİ' } },
+        'Tamamlanma Tarihi': { date: { start: trSu.toISOString() } }
+      }
+    })
+  );
 }
 
 async function isArsivle(page) {
@@ -213,23 +222,25 @@ async function isArsivle(page) {
   const oncelik = notionMetinAl(page.properties['ÖNCELİK']);
   const sorumlu = notionMetinAl(page.properties['SORUMLU']);
   const tamamlanmaTarihi = page.properties['Tamamlanma Tarihi']?.date?.start || new Date().toISOString();
-  await notion.pages.create({
-    parent: { database_id: ARSIV_DATABASE_ID },
-    properties: {
-      'İş Başlığı': { title: [{ text: { content: baslik } }] },
-      'DURUM': { select: { name: 'BİTTİ' } },
-      'ÖNCELİK': { select: { name: oncelik === '-' ? 'NORMAL' : oncelik } },
-      'SORUMLU': { rich_text: [{ text: { content: sorumlu === '-' ? '' : sorumlu } }] },
-      'Arşivlenme Tarihi': { date: { start: new Date().toISOString() } },
-      'Tamamlanma Tarihi': { date: { start: tamamlanmaTarihi } }
-    }
-  });
-  await notion.pages.update({ page_id: page.id, archived: true });
+  await retryAsync(() =>
+    notion.pages.create({
+      parent: { database_id: ARSIV_DATABASE_ID },
+      properties: {
+        'İş Başlığı': { title: [{ text: { content: baslik } }] },
+        'DURUM': { select: { name: 'BİTTİ' } },
+        'ÖNCELİK': { select: { name: oncelik === '-' ? 'NORMAL' : oncelik } },
+        'SORUMLU': { rich_text: [{ text: { content: sorumlu === '-' ? '' : sorumlu } }] },
+        'Arşivlenme Tarihi': { date: { start: new Date().toISOString() } },
+        'Tamamlanma Tarihi': { date: { start: tamamlanmaTarihi } }
+      }
+    })
+  );
+  await retryAsync(() => notion.pages.update({ page_id: page.id, archived: true }));
 }
 
 async function bitenIsBildirimiGonder(pageId) {
   try {
-    const page = await notion.pages.retrieve({ page_id: pageId });
+    const page = await retryAsync(() => notion.pages.retrieve({ page_id: pageId }));
     const baslik = notionMetinAl(page.properties['İş Başlığı']);
     const sorumlu = notionMetinAl(page.properties['SORUMLU']);
     const oncelik = notionMetinAl(page.properties['ÖNCELİK']);
@@ -243,10 +254,12 @@ async function bitenIsBildirimiGonder(pageId) {
 
 async function buHaftanınShiftiniGetir() {
   try {
-    const response = await notion.databases.query({
-      database_id: SHIFT_DATABASE_ID,
-      filter: { property: 'Hafta', title: { equals: haftaNumarasi() } }
-    });
+    const response = await retryAsync(() =>
+      notion.databases.query({
+        database_id: SHIFT_DATABASE_ID,
+        filter: { property: 'Hafta', title: { equals: haftaNumarasi() } }
+      })
+    );
     return response.results.length > 0 ? response.results[0] : null;
   } catch (e) { return null; }
 }
@@ -313,8 +326,8 @@ async function shiftKaydet(metin, chatId) {
     'BL_Shift': { rich_text: [{ text: { content: kisiler['BL'] || '' } }] },
     'BL_Izin': { rich_text: [{ text: { content: izinler['BL'] || '' } }] }
   };
-  if (mevcut) await notion.pages.update({ page_id: mevcut.id, properties });
-  else await notion.pages.create({ parent: { database_id: SHIFT_DATABASE_ID }, properties });
+  if (mevcut) await retryAsync(() => notion.pages.update({ page_id: mevcut.id, properties }));
+  else await retryAsync(() => notion.pages.create({ parent: { database_id: SHIFT_DATABASE_ID }, properties }));
 
   const shiftMetin = Object.entries(kisiler).map(([kisi, shift]) => {
     const saatler = SHIFT_SAATLERI[shift];
@@ -333,8 +346,7 @@ async function shiftKaydet(metin, chatId) {
 
 async function tekrarEdenIsleriGetir() {
   try {
-    const response = await notion.databases.query({ database_id: TEKRAR_DATABASE_ID });
-    return response.results;
+    return await retryAsync(() => notion.databases.query({ database_id: TEKRAR_DATABASE_ID }).then(r => r.results));
   } catch (e) { return []; }
 }
 
@@ -370,10 +382,10 @@ async function tekrarEdenIsleriKontrolEt() {
     const mesaideOlanlar = suAnMesaideKimVar(shiftData);
     const sorumlu = mesaideOlanlar.length > 0 ? mesaideOlanlar.join(', ') : 'Belirsiz';
     try {
-      const not = `Otomatik açıldı,Kim yaptı: ${sorumlu}`;
+      const not = `Otomatik açıldı, Kim yaptı: ${sorumlu}`;
       const altM = altMaddeler !== '-' ? altMaddeler + ',' + not : not;
       await yeniIsOlustur(baslik, oncelik === '-' ? 'NORMAL' : oncelik, sorumlu, 'yok', altM);
-      await notion.pages.update({ page_id: is.id, properties: { 'SON_TETIKLEME': { date: { start: simdi.toISOString() } } } });
+      await retryAsync(() => notion.pages.update({ page_id: is.id, properties: { 'SON_TETIKLEME': { date: { start: simdi.toISOString() } } } }));
       await bot.sendMessage(CHAT_ID, `🔁 <b>TEKRAR EDEN İŞ AÇILDI</b>\n━━━━━━━━━━━━━━━\n\n${oncelikEmoji(oncelik)} <b>${baslik}</b>\n👤 ${sorumlu}`, { parse_mode: 'HTML' });
     } catch (e) { console.error('Tekrar eden iş hatası:', e.message); }
   }
@@ -428,7 +440,7 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
       if (durum.altMaddeler && durum.altMaddeler.toLowerCase() !== 'yok') {
         properties['ALT_MADDELER'] = { rich_text: [{ text: { content: durum.altMaddeler } }] };
       }
-      await notion.pages.create({ parent: { database_id: TEKRAR_DATABASE_ID }, properties });
+      await retryAsync(() => notion.pages.create({ parent: { database_id: TEKRAR_DATABASE_ID }, properties }));
       await mesajGonder(chatId, `✅ <b>TEKRAR EDEN İŞ KAYDEDİLDİ</b>\n━━━━━━━━━━━━━━━\n\n${oncelikEmoji(durum.oncelik)} <b>${durum.isAdi}</b>\n🔁 ${durum.tekrarTip} — ${durum.tekrarGun || 'Her Gün'} ${durum.tekrarSaat}`);
     } catch (e) { await mesajGonder(chatId, '❌ Hata: ' + e.message); }
   }
@@ -463,25 +475,23 @@ async function yuksekIsleriiBildir() {
 }
 
 // =========================================
-//   HAYDAR AI
+//   HAYDAR AI — VERİ ÇEKME
 // =========================================
 
 async function tumVeriCek() {
-  const [acikIsler, tekrarIsler, shiftData] = await Promise.all([
+  const [acikIsler, tekrarIsler, shiftData, bitenIsler] = await Promise.all([
     acikIsleriGetir().catch(() => []),
     tekrarEdenIsleriGetir().catch(() => []),
-    buHaftanınShiftiniGetir().catch(() => null)
+    buHaftanınShiftiniGetir().catch(() => null),
+    bitenIsleriGetir().catch(() => [])
   ]);
-
-  // Biten işleri ayrı çek (bugün için)
-  const bitenIsler = await bitenIsleriGetir().catch(() => []);
 
   const mesaideOlanlar = suAnMesaideKimVar(shiftData);
   const tr = trSimdi();
   const saatStr = `${String(tr.getUTCHours()).padStart(2, '0')}:${String(tr.getUTCMinutes()).padStart(2, '0')}`;
 
   let context = `=== GÜNCEL DURUM ===\n`;
-  context += `Tarih: ${bugunTarih()}, Saat: ${saatStr}\n`;
+  context += `Tarih: ${bugunTarih()}, Saat: ${saatStr}, Gün: ${gunAdi(tr)}\n`;
   context += `Şu an mesaide: ${mesaideOlanlar.length > 0 ? mesaideOlanlar.join(', ') : 'Belirsiz'}\n\n`;
 
   context += `=== AÇIK İŞLER (${acikIsler.length}) ===\n`;
@@ -494,7 +504,7 @@ async function tumVeriCek() {
       const sorumlu = notionMetinAl(is.properties['SORUMLU']);
       const deadline = notionMetinAl(is.properties['Deanline']);
       const maddeler = altMaddeleriParse(notionMetinAl(is.properties['NOTLAR']));
-      const maddeInfo = maddeler.length > 0 ? ` [${maddeler.filter(m=>m.tamamlandi).length}/${maddeler.length} madde]` : '';
+      const maddeInfo = maddeler.length > 0 ? ` [${maddeler.filter(m => m.tamamlandi).length}/${maddeler.length} madde]` : '';
       context += `${i + 1}. [${oncelik}] ${baslik}${maddeInfo} | Sorumlu: ${sorumlu} | Deadline: ${deadline}\n`;
     });
   }
@@ -539,69 +549,146 @@ async function tumVeriCek() {
   return { context, acikIsler, bitenIsler, tekrarIsler };
 }
 
+// =========================================
+//   HAYDAR AI — HAFIZA SIKISTIRMA
+// =========================================
+
+async function gecmisiSikistir(gecmis) {
+  if (gecmis.length <= 20) return gecmis;
+  // Son 6 mesajı koru, gerisini özetle
+  const ozetlen = gecmis.slice(0, -6);
+  const korununlar = gecmis.slice(-6);
+  try {
+    const ozet = await mistral.chat.complete({
+      model: 'mistral-large-latest',
+      messages: [
+        {
+          role: 'system',
+          content: 'Aşağıdaki konuşma geçmişini 3-4 cümleyle Türkçe özetle. Yapılan işlemleri, kararları ve önemli bilgileri kaybet.'
+        },
+        {
+          role: 'user',
+          content: ozetlen.map(m => `${m.role === 'user' ? 'Kullanıcı' : 'Haydar'}: ${m.content}`).join('\n')
+        }
+      ],
+      maxTokens: 300
+    });
+    const ozetMetin = ozet.choices[0].message.content.trim();
+    return [
+      { role: 'user', content: `[Önceki konuşma özeti: ${ozetMetin}]` },
+      { role: 'assistant', content: 'Anladım, devam edelim.' },
+      ...korununlar
+    ];
+  } catch (e) {
+    // Özetleme başarısız olursa sadece son 10'u al
+    return gecmis.slice(-10);
+  }
+}
+
+// =========================================
+//   HAYDAR AI — WEB ARAMA
+// =========================================
+
+async function webArama(sorgu, derinlik = 'basic') {
+  try {
+    const result = await tavilyClient.search(sorgu, {
+      searchDepth: derinlik,
+      maxResults: 4,
+      includeAnswer: true,
+      includeRawContent: false
+    });
+    let bilgi = '';
+    if (result.answer) bilgi += `Özet: ${result.answer}\n\n`;
+    if (result.results && result.results.length > 0) {
+      bilgi += 'Kaynaklar:\n';
+      result.results.forEach((r, i) => {
+        bilgi += `${i + 1}. ${r.title}\n${r.content?.slice(0, 400) || ''}\nURL: ${r.url}\n\n`;
+      });
+    }
+    return bilgi || 'Sonuç bulunamadı.';
+  } catch (e) {
+    return `Arama hatası: ${e.message}`;
+  }
+}
+
+// =========================================
+//   HAYDAR AI — DÜŞÜNME MOTORU
+// =========================================
+
 async function haydarDusun(mesajlar, context, acikIsler) {
   const acikIsListesi = acikIsler.map((is, i) => {
     return `${i + 1}. ${notionMetinAl(is.properties['İş Başlığı'])} [${notionMetinAl(is.properties['ÖNCELİK'])}] - ${notionMetinAl(is.properties['SORUMLU'])}`;
   }).join('\n');
 
-  const sistemPrompt = `Sen Haydar'sın. Bir ekibin iş takip Telegram botunun yapay zeka asistanısın.
+  const tr = trSimdi();
+
+  const sistemPrompt = `Sen Haydar'sın. Bir ekibin iş takip Telegram botunun yapay zeka asistanısın. Ekibin bir parçasısın, yabancı değilsin.
 
 KİŞİLİĞİN:
-- Samimi, sıcak ve ekibin bir parçasısın
-- Türkçe konuşursun, argo kullanabilirsin (abi, kanka vb.)
-- Kısa ve net cevap verirsin, gereksiz uzatmazsın
+- Samimi ve sıcaksın, ekiple abi-kardeş ilişkin var
+- Türkçe konuşursun, doğal argo kullanabilirsin (abi, kanka, aga, vb.)
+- Kısa ve net cevap verirsin — gereksiz uzatmazsın, madde madde sıralamak yerine akıcı yazarsın
 - Her şeyi yapabilirsin, "yapamam" demezsin
+- Eğer bir şey bilmiyorsan web'de ararsın, kafadan uydurmassın
+- Gerekmedikçe soru sormadan direkt aksiyona geçersin
 
 YETKİLERİN:
-- Açık işleri listeleyebilirsin
-- Bugün biten işleri görebilirsin
-- Belirli bir tarihe ait biten işleri görebilirsin
-- Yeni iş açabilirsin
-- İş tamamlayabilirsin
-- İşi iptal edip silebilirsin
-- Shift bilgisini görebilirsin
-- Tekrar eden işleri listeleyebilirsin
-- Arşivleme yapabilirsin
+- Açık işleri listelemek ve analiz etmek
+- Bugün veya belirli tarihteki biten işleri görmek
+- Yeni iş açmak
+- İş tamamlamak
+- İptal/silmek
+- Shift bilgisini görmek
+- Tekrar eden işleri listelemek
+- Arşivleme
+- İnternette arama (döviz, haber, hava durumu, güncel bilgi, herhangi bir konu)
 
-GÜNCEL VERİLER:
+GÜNCEL DURUM:
 ${context}
+Şu anki gün ve saat: ${gunAdi(tr)}, ${String(tr.getUTCHours()).padStart(2, '0')}:${String(tr.getUTCMinutes()).padStart(2, '0')}
 
-AÇIK İŞLERİN NUMARALI LİSTESİ (işlem için kullan):
+AÇIK İŞLERİN NUMARALI LİSTESİ:
 ${acikIsListesi || 'Açık iş yok'}
 
-YANIT FORMATI:
-Her zaman şu JSON formatında yanıt ver, SADECE JSON, başka hiçbir şey yazma:
+KARAR KURALLARI:
+- Güncel, değişken veya bilmediğin bilgiler (döviz, haber, hava durumu, spor, fiyat vb.) için WEB_ARA kullan
+- Aynı konuda birden fazla şey sorulursa tek seferde birden fazla WEB_ARA yapabilirsin (aksiyon: "WEB_ARA_COKLU")
+- İş sorularında Notion verisini kullan, web aramana gerek yok
+- Kullanıcı hangi işi kastettiğini net söylemediyse en mantıklı eşleşmeyi seç, mesajında belirt
+- Öncelik belirtilmemişse NORMAL kullan
+- Sorumlu belirtilmemişse şu an mesaidekileri yaz, yoksa "Belirsiz"
+- Konuşma geçmişini takip et, önceki mesajlara atıf yapabilirsin
+
+YANIT FORMATI — SADECE JSON, başka hiçbir şey yazma:
 {
-  "mesaj": "Kullanıcıya söylenecek samimi mesaj",
+  "mesaj": "Kullanıcıya söylenecek samimi mesaj (WEB_ARA aksiyonlarında boş bırak)",
   "aksiyon": "AKSIYON_ADI",
   "parametreler": {}
 }
 
 AKSIYONLAR:
-- "YOK" → sadece konuş, işlem yapma
+- "YOK" → sadece konuş
+- "WEB_ARA" → parametreler: { "sorgu": "arama terimi", "derinlik": "basic|advanced" }
+- "WEB_ARA_COKLU" → parametreler: { "sorgular": ["sorgu1", "sorgu2"] }
 - "LISTELE_ACIK" → açık işleri listele
-- "LISTELE_BITEN" → biten işleri listele. Tarih belirtilmişse parametreler: { "tarih": "GG.AA.YYYY" }, belirtilmemişse bugünü kullan
+- "LISTELE_BITEN" → parametreler: { "tarih": "GG.AA.YYYY" } (belirtilmezse bugün)
 - "LISTELE_TEKRAR" → tekrar eden işleri listele
 - "IS_AC" → parametreler: { "isAdi": "...", "oncelik": "KRİTİK|YÜKSEK|NORMAL|BEKLEMEDE", "sorumlu": "...", "deadline": "GG.AA.YYYY SS:DD veya yok", "altMaddeler": "madde1,madde2 veya yok" }
 - "IS_TAMAMLA" → parametreler: { "isNo": 1 }
 - "IS_IPTAL" → parametreler: { "isNo": 1 }
-- "ARSIVLE" → biten tüm işleri arşivle
+- "ARSIVLE" → biten tüm işleri arşivle`;
 
-KURALLAR:
-- Kullanıcı hangi işi kastettiğini net söylemediyse, en mantıklı eşleşmeyi seç ve mesajında belirt
-- Öncelik belirtilmemişse NORMAL kullan
-- Sorumlu belirtilmemişse şu an mesaidekileri yaz, yoksa "Belirsiz"
-- Konuşma geçmişini takip et, önceki mesajlara atıf yapabilirsin
-- Biten işleri sorgularken context'teki "BUGÜN BİTEN İŞLER" verisini kullan`;
-
-  const response = await mistral.chat.complete({
-    model: 'mistral-large-latest',
-    messages: [
-      { role: 'system', content: sistemPrompt },
-      ...mesajlar
-    ],
-    responseFormat: { type: 'json_object' }
-  });
+  const response = await retryAsync(() =>
+    mistral.chat.complete({
+      model: 'mistral-large-latest',
+      messages: [
+        { role: 'system', content: sistemPrompt },
+        ...mesajlar
+      ],
+      responseFormat: { type: 'json_object' },
+      temperature: 0.4
+    })
+  );
 
   const raw = response.choices[0].message.content.trim();
   try {
@@ -611,9 +698,84 @@ KURALLAR:
   }
 }
 
-async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
+// =========================================
+//   HAYDAR AI — AKSİYON UYGULA
+// =========================================
+
+async function haydarAksiyonUygula(chatId, parsed, acikIsler, gecmis) {
   const { mesaj, aksiyon, parametreler } = parsed;
 
+  // WEB_ARA aksiyonlarında mesaj boş gelir, önce aramayı yap
+  if (aksiyon === 'WEB_ARA') {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const { sorgu, derinlik } = parametreler;
+      const aramaSonucu = await webArama(sorgu, derinlik || 'basic');
+
+      // Arama sonucunu Haydar'a yorumlat
+      const yorumPrompt = `Kullanıcı şunu istedi: "${gecmis[gecmis.length - 1]?.content || sorgu}"
+
+Web araması yaptım ("${sorgu}"), şu sonuçlar geldi:
+${aramaSonucu}
+
+Bu bilgileri kullanarak kullanıcıya Haydar gibi — samimi, kısa, Türkçe — cevap ver. 
+Kaynak URL'lerinden en alakalı birini sonuna ekleyebilirsin ama şart değil.
+Sadece cevap yaz, JSON değil.`;
+
+      const yorumResponse = await retryAsync(() =>
+        mistral.chat.complete({
+          model: 'mistral-large-latest',
+          messages: [
+            { role: 'system', content: 'Sen Haydar\'sın. Samimi, kısa, Türkçe cevap ver. Argo kullanabilirsin. Kafadan uydurma, verilen bilgiyi kullan.' },
+            { role: 'user', content: yorumPrompt }
+          ],
+          temperature: 0.5
+        })
+      );
+
+      const yorumMetin = yorumResponse.choices[0].message.content.trim();
+      await mesajGonder(chatId, `🌐 ${yorumMetin}`);
+    } catch (e) {
+      await mesajGonder(chatId, '❌ Web aramada sorun çıktı: ' + e.message);
+    }
+    return;
+  }
+
+  if (aksiyon === 'WEB_ARA_COKLU') {
+    try {
+      await bot.sendChatAction(chatId, 'typing');
+      const { sorgular } = parametreler;
+      const sonuclar = await Promise.all(sorgular.map(s => webArama(s, 'basic')));
+      const birlestirilenSonuc = sorgular.map((s, i) => `=== "${s}" sonuçları ===\n${sonuclar[i]}`).join('\n\n');
+
+      const yorumPrompt = `Kullanıcı şunu istedi: "${gecmis[gecmis.length - 1]?.content}"
+
+Birden fazla web araması yaptım:
+${birlestirilenSonuc}
+
+Bu bilgileri karşılaştırarak kullanıcıya Haydar gibi — samimi, kapsamlı ama gereksiz uzun olmayan, Türkçe — cevap ver.
+Sadece cevap yaz, JSON değil.`;
+
+      const yorumResponse = await retryAsync(() =>
+        mistral.chat.complete({
+          model: 'mistral-large-latest',
+          messages: [
+            { role: 'system', content: 'Sen Haydar\'sın. Samimi, Türkçe cevap ver. Birden fazla kaynaktan gelen bilgiyi sentezle.' },
+            { role: 'user', content: yorumPrompt }
+          ],
+          temperature: 0.5
+        })
+      );
+
+      const yorumMetin = yorumResponse.choices[0].message.content.trim();
+      await mesajGonder(chatId, `🌐 ${yorumMetin}`);
+    } catch (e) {
+      await mesajGonder(chatId, '❌ Çoklu arama hatası: ' + e.message);
+    }
+    return;
+  }
+
+  // Diğer aksiyonlarda önce mesajı gönder
   if (mesaj) await mesajGonder(chatId, mesaj);
 
   if (aksiyon === 'LISTELE_ACIK') {
@@ -629,7 +791,7 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
       const sorumlu = notionMetinAl(is.properties['SORUMLU']);
       const deadline = notionMetinAl(is.properties['Deanline']);
       const maddeler = altMaddeleriParse(notionMetinAl(is.properties['NOTLAR']));
-      const maddeInfo = maddeler.length > 0 ? ` (${maddeler.filter(m=>m.tamamlandi).length}/${maddeler.length})` : '';
+      const maddeInfo = maddeler.length > 0 ? ` (${maddeler.filter(m => m.tamamlandi).length}/${maddeler.length})` : '';
       const kart = `${oncelikEmoji(oncelik)} <b>${baslik}</b>${maddeInfo}\n👤 ${sorumlu} ⏰ ${deadline}`;
       (gruplar[oncelik] || gruplar['DİĞER']).push(kart);
     }
@@ -640,7 +802,6 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
     await mesajGonder(chatId, liste);
 
   } else if (aksiyon === 'LISTELE_BITEN') {
-    // Tarih parametresi varsa onu kullan, yoksa bugün
     const tarihParam = parametreler?.tarih || null;
     const isler = await bitenIsleriGetir(tarihParam);
     const tarihGoster = tarihParam || bugunTarih();
@@ -680,7 +841,6 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
   } else if (aksiyon === 'IS_TAMAMLA') {
     const isNo = (parametreler.isNo || 1) - 1;
     if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
-    // DÜZELTİLDİ: isTamamla kullan
     await isTamamla(acikIsler[isNo].id);
     await bitenIsBildirimiGonder(acikIsler[isNo].id);
 
@@ -688,11 +848,13 @@ async function haydarAksiyonUygula(chatId, parsed, acikIsler) {
     const isNo = (parametreler.isNo || 1) - 1;
     if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
     const baslik = notionMetinAl(acikIsler[isNo].properties['İş Başlığı']);
-    await notion.pages.update({ page_id: acikIsler[isNo].id, archived: true });
+    await retryAsync(() => notion.pages.update({ page_id: acikIsler[isNo].id, archived: true }));
     await bot.sendMessage(CHAT_ID, `🗑️ <b>${baslik}</b> silindi.\n\n🤖 Haydar tarafından iptal edildi`, { parse_mode: 'HTML' });
 
   } else if (aksiyon === 'ARSIVLE') {
-    const response = await notion.databases.query({ database_id: DATABASE_ID, filter: { property: 'DURUM', select: { equals: 'BİTTİ' } } });
+    const response = await retryAsync(() =>
+      notion.databases.query({ database_id: DATABASE_ID, filter: { property: 'DURUM', select: { equals: 'BİTTİ' } } })
+    );
     const isler = response.results;
     if (isler.length === 0) { await mesajGonder(chatId, '🗂️ Arşivlenecek biten iş yok.'); return; }
     let basarili = 0;
@@ -719,7 +881,7 @@ bot.onText(/\/acik/, async (msg) => {
       const sorumlu = notionMetinAl(is.properties['SORUMLU']);
       const deadline = notionMetinAl(is.properties['Deanline']);
       const maddeler = altMaddeleriParse(notionMetinAl(is.properties['NOTLAR']));
-      const maddeInfo = maddeler.length > 0 ? ` (${maddeler.filter(m=>m.tamamlandi).length}/${maddeler.length})` : '';
+      const maddeInfo = maddeler.length > 0 ? ` (${maddeler.filter(m => m.tamamlandi).length}/${maddeler.length})` : '';
       const kart = `${oncelikEmoji(oncelik)} <b>${baslik}</b>${maddeInfo}\n👤 ${sorumlu}\n⏰ ${deadline}`;
       (gruplar[oncelik] || gruplar['DİĞER']).push(kart);
     }
@@ -739,7 +901,7 @@ bot.onText(/\/kritik/, async (msg) => {
     let metin = `🔴 <b>KRİTİK (${isler.length})</b>\n━━━━━━━━━━━━━━━\n\n`;
     for (const is of isler) {
       const maddeler = altMaddeleriParse(notionMetinAl(is.properties['NOTLAR']));
-      const maddeInfo = maddeler.length > 0 ? `\n📝 ${maddeler.filter(m=>m.tamamlandi).length}/${maddeler.length} madde` : '';
+      const maddeInfo = maddeler.length > 0 ? `\n📝 ${maddeler.filter(m => m.tamamlandi).length}/${maddeler.length} madde` : '';
       metin += `🔴 <b>${notionMetinAl(is.properties['İş Başlığı'])}</b>\n👤 ${notionMetinAl(is.properties['SORUMLU'])}\n⏰ ${notionMetinAl(is.properties['Deanline'])}${maddeInfo}\n\n`;
     }
     await mesajGonder(chatId, metin);
@@ -787,7 +949,9 @@ bot.onText(/\/biten(.*)/, async (msg, match) => {
 bot.onText(/\/arsivle/, async (msg) => {
   const chatId = msg.chat.id;
   try {
-    const response = await notion.databases.query({ database_id: DATABASE_ID, filter: { property: 'DURUM', select: { equals: 'BİTTİ' } } });
+    const response = await retryAsync(() =>
+      notion.databases.query({ database_id: DATABASE_ID, filter: { property: 'DURUM', select: { equals: 'BİTTİ' } } })
+    );
     const isler = response.results;
     if (isler.length === 0) { await mesajGonder(chatId, '🗂️ Arşivlenecek biten iş yok.'); return; }
     await mesajGonder(chatId, `⏳ ${isler.length} iş arşivleniyor...`);
@@ -873,10 +1037,15 @@ bot.on('message', async (msg) => {
       await bot.sendChatAction(chatId, 'typing');
       const { context, acikIsler } = await tumVeriCek();
       kullaniciDurum[chatId].gecmis.push({ role: 'user', content: istek });
-      if (kullaniciDurum[chatId].gecmis.length > 20) kullaniciDurum[chatId].gecmis = kullaniciDurum[chatId].gecmis.slice(-20);
+
+      // Hafıza sıkıştırma
+      if (kullaniciDurum[chatId].gecmis.length > 20) {
+        kullaniciDurum[chatId].gecmis = await gecmisiSikistir(kullaniciDurum[chatId].gecmis);
+      }
+
       const parsed = await haydarDusun(kullaniciDurum[chatId].gecmis, context, acikIsler);
-      kullaniciDurum[chatId].gecmis.push({ role: 'assistant', content: parsed.mesaj || '' });
-      await haydarAksiyonUygula(chatId, parsed, acikIsler);
+      kullaniciDurum[chatId].gecmis.push({ role: 'assistant', content: parsed.mesaj || parsed.aksiyon });
+      await haydarAksiyonUygula(chatId, parsed, acikIsler, kullaniciDurum[chatId].gecmis);
     } catch (e) { await mesajGonder(chatId, '❌ Haydar hatası: ' + e.message); }
     return;
   }
@@ -892,10 +1061,15 @@ bot.on('message', async (msg) => {
       await bot.sendChatAction(chatId, 'typing');
       const { context, acikIsler } = await tumVeriCek();
       kullaniciDurum[chatId].gecmis.push({ role: 'user', content: metin });
-      if (kullaniciDurum[chatId].gecmis.length > 20) kullaniciDurum[chatId].gecmis = kullaniciDurum[chatId].gecmis.slice(-20);
+
+      // Hafıza sıkıştırma
+      if (kullaniciDurum[chatId].gecmis.length > 20) {
+        kullaniciDurum[chatId].gecmis = await gecmisiSikistir(kullaniciDurum[chatId].gecmis);
+      }
+
       const parsed = await haydarDusun(kullaniciDurum[chatId].gecmis, context, acikIsler);
-      kullaniciDurum[chatId].gecmis.push({ role: 'assistant', content: parsed.mesaj || '' });
-      await haydarAksiyonUygula(chatId, parsed, acikIsler);
+      kullaniciDurum[chatId].gecmis.push({ role: 'assistant', content: parsed.mesaj || parsed.aksiyon });
+      await haydarAksiyonUygula(chatId, parsed, acikIsler, kullaniciDurum[chatId].gecmis);
     } catch (e) { await mesajGonder(chatId, '❌ Haydar hatası: ' + e.message); }
     return;
   }
@@ -943,7 +1117,6 @@ bot.on('message', async (msg) => {
     const maddeler = altMaddeleriParse(notionMetinAl(secilenIs.properties['NOTLAR']));
     if (maddeler.length === 0) {
       delete kullaniciDurum[chatId];
-      // DÜZELTİLDİ: isTamamla kullan
       await isTamamla(secilenIs.id);
       await bitenIsBildirimiGonder(secilenIs.id);
       return;
@@ -957,7 +1130,6 @@ bot.on('message', async (msg) => {
     const { secilenIs, baslik, maddeler } = durum;
     if (metin.toLowerCase() === 'bitir') {
       delete kullaniciDurum[chatId];
-      // DÜZELTİLDİ: isTamamla kullan
       await isTamamla(secilenIs.id);
       await bitenIsBildirimiGonder(secilenIs.id);
       return;
@@ -969,9 +1141,7 @@ bot.on('message', async (msg) => {
     }
     const yeniNotlar = altMaddeleriYaz(maddeler);
     const hepsiTamam = maddeler.every(m => m.tamamlandi);
-
     if (hepsiTamam) {
-      // DÜZELTİLDİ: önce NOTLAR güncelle, sonra isTamamla ile BİTTİ + tarih kaydet
       await isGuncelle(secilenIs.id, { 'NOTLAR': { rich_text: [{ text: { content: yeniNotlar } }] } });
       await isTamamla(secilenIs.id);
       delete kullaniciDurum[chatId];
@@ -996,4 +1166,4 @@ setInterval(kritikIsleriiBildir, 30 * 60 * 1000);
 setInterval(yuksekIsleriiBildir, 45 * 60 * 1000);
 setInterval(tekrarEdenIsleriKontrolEt, 60 * 1000);
 
-console.log('🤖 İşler Botu başlatıldı! Haydar hazır.');
+console.log('🤖 İşler Botu başlatıldı! Haydar hazır. 🌐 Web search aktif.');

@@ -850,8 +850,17 @@ Sadece cevap yaz, JSON değil.`;
   } else if (aksiyon === 'IS_TAMAMLA') {
     const isNo = (parametreler.isNo || 1) - 1;
     if (!acikIsler[isNo]) { await mesajGonder(chatId, '❌ İş bulunamadı.'); return; }
-    await isTamamla(acikIsler[isNo].id);
-    await bitenIsBildirimiGonder(acikIsler[isNo].id);
+    const secilenIs = acikIsler[isNo];
+    const maddeler = altMaddeleriParse(notionMetinAl(secilenIs.properties['NOTLAR']));
+    const acikMaddeler = maddeler.filter(m => !m.tamamlandi);
+    if (acikMaddeler.length > 0) {
+      const maddeListesi = maddeler.map((m, i) => `${i + 1}. ${m.tamamlandi ? '☑' : '☐'} ${m.metin}`).join('\n');
+      await mesajGonder(chatId, `⚠️ Henüz tamamlanmamış ${acikMaddeler.length} alt madde var:\n\n${maddeListesi}\n\nYine de tamamlamak istiyorsan "evet tamamla" de.`);
+      kullaniciDurum[chatId].bekleyenTamamlama = secilenIs;
+      return;
+    }
+    await isTamamla(secilenIs.id);
+    await bitenIsBildirimiGonder(secilenIs.id);
 
   } else if (aksiyon === 'IS_IPTAL') {
     const isNo = (parametreler.isNo || 1) - 1;
@@ -1058,6 +1067,15 @@ bot.on('message', async (msg) => {
     } catch (e) { await mesajGonder(chatId, '❌ Haydar hatası: ' + e.message); }
     return;
   }
+  
+  // Bekleyen tamamlama onayı
+    if (kullaniciDurum[chatId]?.bekleyenTamamlama && /evet tamamla/i.test(metin)) {
+      const is = kullaniciDurum[chatId].bekleyenTamamlama;
+      delete kullaniciDurum[chatId].bekleyenTamamlama;
+      await isTamamla(is.id);
+      await bitenIsBildirimiGonder(is.id);
+      return;
+    }
 
   // Haydar aktifse her mesajı işle
   if (kullaniciDurum[chatId]?.adim === 'haydar_aktif') {

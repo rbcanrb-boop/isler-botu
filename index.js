@@ -189,22 +189,32 @@ async function bitenIsleriGetir(tarihStr = null) {
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
   const properties = {
-    'İş Başlığı': { title: [{ text: { content: isAdi } }] },
+    'İş Başlığı': { title: [{ text: { content: isAdi || '' } }] },
     'DURUM': { select: { name: 'AÇIK' } },
     'ÖNCELİK': { select: { name: oncelik || 'NORMAL' } },
     'SORUMLU': { rich_text: [{ text: { content: sorumlu || '' } }] }
   };
+
   if (deadline && deadline.toLowerCase() !== 'yok') {
     const p = deadline.match(/(\d{1,2})\.(\d{1,2})\.(\d{4})\s+(\d{1,2}):(\d{2})/);
     if (p) {
-      properties['Deanline'] = { date: { start: `${p[3]}-${p[2].padStart(2, '0')}-${p[1].padStart(2, '0')}T${p[4].padStart(2, '0')}:${p[5]}:00` } };
+      const isoStr = `${p[3]}-${p[2].padStart(2, '0')}-${p[1].padStart(2, '0')}T${p[4].padStart(2, '0')}:${p[5]}:00`;
+      properties['Deanline'] = { date: { start: isoStr } };
     }
+    // Format tutmazsa deadline'ı hiç gönderme, hata vermesin
   }
+
   if (altMaddeler && altMaddeler.toLowerCase() !== 'yok') {
-    const maddeler = altMaddeler.split(',').map(m => `☐ ${m.trim()}`).join('\n');
-    properties['NOTLAR'] = { rich_text: [{ text: { content: maddeler } }] };
+    // Emoji ve özel karakterleri temizle
+    const temiz = altMaddeler
+      .split(',')
+      .map(m => `☐ ${m.trim().replace(/[^\u0000-\uFFFF]/g, '')}`)
+      .join('\n');
+    properties['NOTLAR'] = { rich_text: [{ text: { content: temiz } }] };
   }
+
   return await retryAsync(() => notion.pages.create({ parent: { database_id: DATABASE_ID }, properties }));
+}
 }
 
 async function isGuncelle(pageId, properties) {

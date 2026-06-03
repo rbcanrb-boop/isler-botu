@@ -418,7 +418,9 @@ async function tekrarEdenIsEkle(chatId, durum, metin) {
       one_time_keyboard: true, resize_keyboard: true
     });
   } else if (durum.adim === 'tekrar_oncelik') {
-    durum.oncelik = metin.replace(/^[🔴🟡🟢🔵]\s*/, '');
+    const oncelikMap = { 'KRİTİK': 'KRİTİK', 'YÜKSEK': 'YÜKSEK', 'NORMAL': 'NORMAL', 'BEKLEMEDE': 'BEKLEMEDE' };
+const temizOncelik = metin.replace(/[^\w\sğüşıöçĞÜŞİÖÇ]/g, '').trim();
+durum.oncelik = oncelikMap[temizOncelik] || 'NORMAL';
     durum.adim = 'tekrar_tip';
     await mesajGonder(chatId, `✅ Öncelik: <b>${durum.oncelik}</b>\n\n<b>3/5 — Tekrar tipi?</b>`, {
       keyboard: [[{ text: 'Günlük' }, { text: 'Haftalık' }], [{ text: 'Aylık' }]],
@@ -1128,8 +1130,10 @@ await mesajGonder(chatId, '👋 Tamam, iyi çalışmalar. İhtiyaç olursa "hayd
       keyboard: [[{ text: '🔴 KRİTİK' }, { text: '🟡 YÜKSEK' }], [{ text: '🟢 NORMAL' }, { text: '🔵 BEKLEMEDE' }]],
       one_time_keyboard: true, resize_keyboard: true
     });
-  } else if (durum.adim === 'oncelik') {
-    durum.oncelik = metin.replace(/^[🔴🟡🟢🔵]\s*/, '');
+    } else if (durum.adim === 'oncelik') {
+    const oncelikMap = { 'KRİTİK': 'KRİTİK', 'YÜKSEK': 'YÜKSEK', 'NORMAL': 'NORMAL', 'BEKLEMEDE': 'BEKLEMEDE' };  
+    const temizOncelik = metin.replace(/[^\w\sğüşıöçĞÜŞİÖÇ]/g, '').trim();  
+    durum.oncelik = oncelikMap[temizOncelik] || 'NORMAL';  
     durum.adim = 'sorumlu';
     await mesajGonder(chatId, `✅ Öncelik: <b>${durum.oncelik}</b>\n\n<b>3/5 — Sorumlu?</b>`, { remove_keyboard: true });
   } else if (durum.adim === 'sorumlu') {

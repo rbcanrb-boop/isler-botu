@@ -633,12 +633,12 @@ async function haydarDusun(mesajlar, context, acikIsler) {
   const sistemPrompt = `Sen Haydar'sın. Bir ekibin iş takip Telegram botunun yapay zeka asistanısın. Ekibin bir parçasısın, yabancı değilsin.
 
 KİŞİLİĞİN:
-- Samimi ve sıcaksın ama kurumsal bir ilişkin var yazanlar senin üst yöneticin.
-- Türkçe konuşursun, akıcı kurumsal bir dilin var. 
-- Kısa ve net cevap verirsin — gereksiz uzatmazsın, madde madde sıralamak yerine akıcı yazarsın ama alt alta yaz derlerse listele 
-- Her şeyi yapabilirsin, "yapamam" demezsin ama bilmediğin konularda sallama yapmazsın
-- Eğer bir şey bilmiyorsan web'de ararsın, kafadan uydurmassın
-- Gerekmedikçe soru sormadan direkt aksiyona geçersin ama önce bir teyit alabilirsin
+- Profesyonel ve kurumsal bir dil kullanırsın; abi, aga, kanka, bro gibi hitaplar kesinlikle kullanmazsın.
+- Türkçe konuşursun, resmi ama soğuk değil; sade ve anlaşılır bir kurumsal ton tutturursun.
+- Kısa ve net cevap verirsin — gereksiz uzatmazsın, madde madde sıralamak yerine akıcı yazarsın ama istenirse listelersin.
+- Her şeyi yapabilirsin, "yapamam" demezsin ama bilmediğin konularda tahmin yürütmezsin.
+- Bilmediğin konularda web'de araştırır, doğrulanmış bilgi sunarsın.
+- Gerekmedikçe soru sormadan direkt aksiyona geçersin; gerekirse kısa bir onay alırsın.
 
 YETKİLERİN:
 - Açık işleri listelemek ve analiz etmek
@@ -735,7 +735,7 @@ Sadece cevap yaz, JSON değil.`;
         mistral.chat.complete({
           model: 'mistral-large-latest',
           messages: [
-            { role: 'system', content: 'Sen Haydar\'sın. Samimi, kısa, Türkçe cevap ver. Argo kullanabilirsin. Kafadan uydurma, verilen bilgiyi kullan.' },
+{ role: 'system', content: 'Sen Haydar\'sın. Kurumsal ve sade bir Türkçe kullan. Argo veya samimi hitaplardan kaçın. Kısa ve net cevap ver. Verilen bilgiyi kullan, tahmin yürütme.' },
             { role: 'user', content: yorumPrompt }
           ],
           temperature: 0.5
@@ -769,7 +769,7 @@ Sadece cevap yaz, JSON değil.`;
         mistral.chat.complete({
           model: 'mistral-large-latest',
           messages: [
-            { role: 'system', content: 'Sen Haydar\'sın. Samimi, Türkçe cevap ver. Birden fazla kaynaktan gelen bilgiyi sentezle.' },
+{ role: 'system', content: 'Sen Haydar\'sın. Kurumsal ve sade bir Türkçe kullan. Birden fazla kaynaktan gelen bilgiyi sentezleyerek net bir yanıt oluştur.' },
             { role: 'user', content: yorumPrompt }
           ],
           temperature: 0.5
@@ -1048,7 +1048,7 @@ bot.on('message', async (msg) => {
       kullaniciDurum[chatId] = { adim: 'haydar_aktif', gecmis: [] };
     }
     if (!istek) {
-      await mesajGonder(chatId, '👋 Buyur abi, ne yapayım?');
+await mesajGonder(chatId, '👋 Merhaba, nasıl yardımcı olabilirim?');
       return;
     }
     try {
@@ -1081,7 +1081,7 @@ bot.on('message', async (msg) => {
   if (kullaniciDurum[chatId]?.adim === 'haydar_aktif') {
     if (/haydar kapat|haydar kapanabilirsin|kapan haydar|görüşürüz haydar/i.test(metin)) {
       delete kullaniciDurum[chatId];
-      await mesajGonder(chatId, '👋 Tamam, görüşürüz! Bir şey lazım olursa "haydar" de.');
+await mesajGonder(chatId, '👋 Tamam, iyi çalışmalar. İhtiyaç olursa "haydar" demeniz yeterli.');
       return;
     }
     try {

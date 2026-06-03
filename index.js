@@ -676,6 +676,7 @@ KARAR KURALLARI:
 - Güncel, değişken veya bilmediğin bilgiler (döviz, haber, hava durumu, spor, fiyat vb.) için WEB_ARA kullan
 - Aynı konuda birden fazla şey sorulursa tek seferde birden fazla WEB_ARA yapabilirsin (aksiyon: "WEB_ARA_COKLU")
 - İş sorularında Notion verisini kullan, web aramana gerek yok
+- "Dün", "geçen hafta", "3 gün önce" gibi geçmiş tarih sorularında context'e bakma, LISTELE_BITEN aksiyonunu kullan ve tarihi parametreye yaz
 - Kullanıcı hangi işi kastettiğini net söylemediyse en mantıklı eşleşmeyi seç, mesajında belirt
 - Öncelik belirtilmemişse NORMAL kullan
 - Sorumlu belirtilmemişse şu an mesaidekileri yaz, yoksa "Belirsiz"

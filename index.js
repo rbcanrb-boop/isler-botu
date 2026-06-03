@@ -188,6 +188,8 @@ async function bitenIsleriGetir(tarihStr = null) {
 }
 
 async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
+  console.log('yeniIsOlustur çağrıldı:', JSON.stringify({ isAdi, oncelik, sorumlu, deadline, altMaddeler }));
+  
   const properties = {
     'İş Başlığı': { title: [{ text: { content: isAdi || '' } }] },
     'DURUM': { select: { name: 'AÇIK' } },

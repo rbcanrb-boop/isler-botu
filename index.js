@@ -1060,9 +1060,10 @@ bot.on('message', async (msg) => {
   // haydar ile uyanır
   if (/^haydar/i.test(metin)) {
     const istek = metin.replace(/^haydar[,!]?\s*/i, '').trim();
-    if (!kullaniciDurum[chatId] || kullaniciDurum[chatId].adim !== 'haydar_aktif') {
+if (!kullaniciDurum[chatId] || kullaniciDurum[chatId].adim !== 'haydar_aktif') {
       kullaniciDurum[chatId] = { adim: 'haydar_aktif', gecmis: [] };
     }
+    if (!kullaniciDurum[chatId].gecmis) kullaniciDurum[chatId].gecmis = [];
     if (!istek) {
 await mesajGonder(chatId, '👋 Merhaba, nasıl yardımcı olabilirim?');
       return;
@@ -1094,8 +1095,9 @@ await mesajGonder(chatId, '👋 Merhaba, nasıl yardımcı olabilirim?');
     }
 
   // Haydar aktifse her mesajı işle
-  if (kullaniciDurum[chatId]?.adim === 'haydar_aktif') {
-    if (/haydar kapat|haydar kapanabilirsin|kapan haydar|görüşürüz haydar/i.test(metin)) {
+if (kullaniciDurum[chatId]?.adim === 'haydar_aktif') {
+    if (!kullaniciDurum[chatId].gecmis) kullaniciDurum[chatId].gecmis = [];
+    if (/haydar kapat/i.test(metin)) {
       delete kullaniciDurum[chatId];
 await mesajGonder(chatId, '👋 Tamam, iyi çalışmalar. İhtiyaç olursa "haydar" demeniz yeterli.');
       return;

@@ -215,7 +215,7 @@ async function yeniIsOlustur(isAdi, oncelik, sorumlu, deadline, altMaddeler) {
 
   return await retryAsync(() => notion.pages.create({ parent: { database_id: DATABASE_ID }, properties }));
 }
-}
+
 
 async function isGuncelle(pageId, properties) {
   return await retryAsync(() => notion.pages.update({ page_id: pageId, properties }));

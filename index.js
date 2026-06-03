@@ -1052,6 +1052,7 @@ bot.onText(/\/yardim|\/start/, async (msg) => {
 // =========================================
 
 bot.on('message', async (msg) => {
+    console.log('CHAT ID:', msg.chat.id);  // bunu en üste ekle
   const chatId = msg.chat.id;
   const metin = msg.text || '';
   if (metin.startsWith('/')) return;

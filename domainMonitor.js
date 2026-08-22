@@ -40,6 +40,7 @@
 const fs = require('fs');
 const path = require('path');
 const cron = require('node-cron');
+const dns = require('dns').promises;
 
 // ------------------------- AYARLAR -------------------------
 
@@ -209,7 +210,56 @@ async function checkViaCheckHost(domain) {
   }
 }
 
-// ------------------------- SAĞLAYICI 2: Doğrudan erişim (genel down kontrolü) -------------------------
+// ------------------------- SAĞLAYICI 2b: Türk ISS DNS sorgusu (asıl engel tespiti) -------------------------
+// Türkiye'deki "idari tedbir" engelleri çoğunlukla DNS seviyesinde uygulanır:
+// ISS'nin kendi DNS sunucusu, engelli domain sorulduğunda gerçek IP yerine
+// bilinen bir "erişim engellendi" sayfa adresi döndürür. Bu yüzden bu kontrol,
+// check-host'tan daha güvenilir bir sinyal verir.
+
+const TURK_ISS_DNS = [
+  { isim: 'Turk Telekom', ip: '195.175.39.39' },
+  { isim: 'Superonline', ip: '78.35.53.53' },
+  { isim: 'Vodafone', ip: '195.175.39.40' },
+];
+
+// Bilinen "erişim engellendi" yönlendirme adresleri (DNS sinkhole IP'leri).
+// Bu liste zamanla değişebilir, kesin/eksiksiz değildir - sadece bilinen örnekler.
+const BILINEN_ENGEL_IP_ONEKLERI = ['195.175.254.', '78.135.106.'];
+
+async function tekIssDnsSorgula(domain, issAdi, dnsIp) {
+  const resolver = new dns.Resolver();
+  resolver.setServers([dnsIp]);
+  try {
+    const adresler = await Promise.race([
+      resolver.resolve4(domain),
+      new Promise((_, reject) => setTimeout(() => reject(new Error('timeout')), 5000)),
+    ]);
+    const engelliMi = adresler.some((ip) => BILINEN_ENGEL_IP_ONEKLERI.some((onek) => ip.startsWith(onek)));
+    return { isim: issAdi, sonuc: engelliMi ? 'ENGELLI' : 'TEMIZ', ip: adresler[0] };
+  } catch (err) {
+    // NXDOMAIN veya timeout da bazı ISS'lerde engel yöntemi olabilir
+    return { isim: issAdi, sonuc: 'COZULEMEDI', ip: err.message };
+  }
+}
+
+async function checkViaTurkIssDns(domain) {
+  try {
+    const sonuclar = await Promise.all(
+      TURK_ISS_DNS.map((iss) => tekIssDnsSorgula(domain, iss.isim, iss.ip))
+    );
+    const engelliOlanlar = sonuclar.filter((s) => s.sonuc === 'ENGELLI');
+    const detay = sonuclar.map((s) => `${s.isim}:${s.sonuc}`).join(', ');
+
+    if (engelliOlanlar.length > 0) {
+      return { provider: 'tr-isp-dns', status: 'ENGELLI', detail: `${engelliOlanlar.length}/${sonuclar.length} ISS'de DNS engeli tespit edildi (${detay})` };
+    }
+    return { provider: 'tr-isp-dns', status: 'TEMIZ', detail: detay };
+  } catch (err) {
+    return { provider: 'tr-isp-dns', status: 'HATA', detail: err.message };
+  }
+}
+
+
 
 async function checkViaDirectFetch(domain) {
   try {
@@ -248,20 +298,28 @@ async function checkViaResmiSayfa(domain) {
 // ------------------------- ANA KONTROL MANTIĞI -------------------------
 
 function ozetVerdictOlustur(sonuclar) {
+  // ÖNCELİK 1: Türk ISS DNS kontrolü - gerçek kullanıcı deneyimine en yakın sinyal
+  const issDns = sonuclar.find((s) => s.provider === 'tr-isp-dns');
+  if (issDns?.status === 'ENGELLI') return 'ENGELLI_SUPHESI';
+
+  // ÖNCELİK 2: check-host TR node testi - tamamlayıcı sinyal
   const ch = sonuclar.find((s) => s.provider === 'check-host');
   if (ch?.status === 'ENGELLI_OLABILIR') return 'ENGELLI_SUPHESI';
   if (ch?.status === 'KARISIK') return 'KISMI_ENGEL_SUPHESI';
-  if (ch?.status === 'TEMIZ') return 'TEMIZ';
+
+  if (issDns?.status === 'TEMIZ' && ch?.status === 'TEMIZ') return 'TEMIZ';
+  if (issDns?.status === 'TEMIZ' || ch?.status === 'TEMIZ') return 'TEMIZ';
   return 'BILINMIYOR';
 }
 
 async function checkDomain(domain) {
-  const [chSonuc, directSonuc, resmiSonuc] = await Promise.all([
+  const [chSonuc, issDnsSonuc, directSonuc, resmiSonuc] = await Promise.all([
     checkViaCheckHost(domain),
+    checkViaTurkIssDns(domain),
     checkViaDirectFetch(domain),
     checkViaResmiSayfa(domain),
   ]);
-  const sonuclar = [chSonuc, directSonuc, resmiSonuc];
+  const sonuclar = [chSonuc, issDnsSonuc, directSonuc, resmiSonuc];
   const verdict = ozetVerdictOlustur(sonuclar);
   return { domain, verdict, sonuclar, timestamp: new Date().toISOString() };
 }

@@ -149,9 +149,26 @@ async function getTurkishNodes() {
   });
   const data = await res.json();
   // data.nodes: { "node_id": { location: [...], country: [...], ... } }
-  return Object.entries(data.nodes || {})
-    .filter(([, info]) => (info.country || info.Country || '').toLowerCase().includes('turkey'))
+  const nodeEntries = Object.entries(data.nodes || {});
+
+  // TEŞHİS: ilk node'un ham yapısını logla, alan adlarını görelim
+  if (nodeEntries.length > 0) {
+    console.log('[domainMonitor][DEBUG] Örnek node verisi:', JSON.stringify(nodeEntries[0]));
+    console.log('[domainMonitor][DEBUG] Toplam node sayısı:', nodeEntries.length);
+  } else {
+    console.log('[domainMonitor][DEBUG] nodes/hosts cevabı boş veya beklenmedik formatta:', JSON.stringify(data).slice(0, 300));
+  }
+
+  const trNodes = nodeEntries
+    .filter(([, info]) => {
+      const metin = JSON.stringify(info).toLowerCase();
+      return metin.includes('turkey') || metin.includes('"tr"') || metin.includes(',tr,') || metin.includes('istanbul');
+    })
     .map(([nodeId]) => nodeId);
+
+  console.log('[domainMonitor][DEBUG] Bulunan TR node sayısı:', trNodes.length, trNodes.slice(0, 5));
+
+  return trNodes;
 }
 
 async function checkViaCheckHost(domain) {
@@ -198,9 +215,15 @@ async function checkViaDirectFetch(domain) {
   try {
     const controller = new AbortController();
     const timeout = setTimeout(() => controller.abort(), 8000);
-    const res = await fetch(`https://${domain}`, { signal: controller.signal });
+    const res = await fetch(`https://${domain}`, {
+      signal: controller.signal,
+      headers: {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36',
+      },
+    });
     clearTimeout(timeout);
-    return { provider: 'direct', status: res.ok ? 'ERISILEBILIR' : 'HATA_KODU', detail: `HTTP ${res.status}` };
+    const not = res.status === 403 ? ' (403 genelde bot-koruması anlamına gelir, resmi engel değil)' : '';
+    return { provider: 'direct', status: res.ok ? 'ERISILEBILIR' : 'HATA_KODU', detail: `HTTP ${res.status}${not}` };
   } catch (err) {
     return { provider: 'direct', status: 'ERISILEMIYOR', detail: err.message };
   }

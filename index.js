@@ -9,6 +9,7 @@ const TelegramBot = require('node-telegram-bot-api');
 const { Client } = require('@notionhq/client');
 const { Mistral } = require('@mistralai/mistralai');
 const { tavily } = require('@tavily/core');
+const { startDomainMonitor } = require('./domainMonitor');
 
 // =========================================
 //   ENV DEĞİŞKENLERİ
@@ -1214,3 +1215,4 @@ setInterval(yuksekIsleriiBildir, 45 * 60 * 1000);
 setInterval(tekrarEdenIsleriKontrolEt, 60 * 1000);
 
 console.log('🤖 İşler Botu başlatıldı! Haydar hazır. 🌐 Web search aktif.');
+startDomainMonitor(); 

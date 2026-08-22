@@ -298,17 +298,21 @@ async function checkViaResmiSayfa(domain) {
 // ------------------------- ANA KONTROL MANTIĞI -------------------------
 
 function ozetVerdictOlustur(sonuclar) {
-  // ÖNCELİK 1: Türk ISS DNS kontrolü - gerçek kullanıcı deneyimine en yakın sinyal
+  // ÖNCELİK 1: Türk ISS DNS kontrolü - ama sadece GERÇEKTEN sonuç alabildiyse güvenilir.
+  // COZULEMEDI (ISS dışarıdan sorguyu reddetti) durumunda bu sinyali YOK SAY -
+  // yanlışlıkla "temiz" dememek için.
   const issDns = sonuclar.find((s) => s.provider === 'tr-isp-dns');
-  if (issDns?.status === 'ENGELLI') return 'ENGELLI_SUPHESI';
+  const issDnsGuvenilir = issDns && !/COZULEMEDI/.test(issDns.detail || '');
+  if (issDnsGuvenilir && issDns.status === 'ENGELLI') return 'ENGELLI_SUPHESI';
 
-  // ÖNCELİK 2: check-host TR node testi - tamamlayıcı sinyal
+  // ÖNCELİK 2: check-host TR node testi - not: bu bir veri merkezi ağından test
+  // ediyor, tüketici (ev/mobil) ISS DNS engelini yakalamayabilir. Sadece
+  // "site tamamen erişilemez durumda mı" sorusuna güvenilir cevap verir.
   const ch = sonuclar.find((s) => s.provider === 'check-host');
   if (ch?.status === 'ENGELLI_OLABILIR') return 'ENGELLI_SUPHESI';
   if (ch?.status === 'KARISIK') return 'KISMI_ENGEL_SUPHESI';
 
-  if (issDns?.status === 'TEMIZ' && ch?.status === 'TEMIZ') return 'TEMIZ';
-  if (issDns?.status === 'TEMIZ' || ch?.status === 'TEMIZ') return 'TEMIZ';
+  if (ch?.status === 'TEMIZ') return 'ISS_DNS_ENGELI_TESPIT_EDILEMEZ_DURUMDA';
   return 'BILINMIYOR';
 }
 
@@ -328,11 +332,18 @@ function raporMetniOlustur(sonuc) {
   const emoji = {
     ENGELLI_SUPHESI: '🔴',
     KISMI_ENGEL_SUPHESI: '🟠',
-    TEMIZ: '🟢',
+    ISS_DNS_ENGELI_TESPIT_EDILEMEZ_DURUMDA: '🟡',
     BILINMIYOR: '⚪',
   }[sonuc.verdict] || '⚪';
 
-  let metin = `${emoji} <b>${sonuc.domain}</b> — ${sonuc.verdict}\n`;
+  const aciklama = {
+    ENGELLI_SUPHESI: 'ENGELLİ (yüksek olasılık)',
+    KISMI_ENGEL_SUPHESI: 'KISMİ ENGEL ŞÜPHESİ',
+    ISS_DNS_ENGELI_TESPIT_EDILEMEZ_DURUMDA: 'BELİRSİZ — ISS seviyesi engel bu yöntemle görülemiyor, MANUEL KONTROL ÖNERİLİR',
+    BILINMIYOR: 'BİLİNMİYOR',
+  }[sonuc.verdict] || sonuc.verdict;
+
+  let metin = `${emoji} <b>${sonuc.domain}</b> — ${aciklama}\n`;
   sonuc.sonuclar.forEach((s) => {
     metin += `  • ${s.provider}: ${s.status} (${s.detail})\n`;
   });

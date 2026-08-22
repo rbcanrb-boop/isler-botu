@@ -25,14 +25,15 @@
  *
  * Mevcut bot dosyanıza (örn. index.js) entegrasyon:
  *
- *   const { startDomainMonitor, checkAllDomainsNow } = require('./domainMonitor');
+ *   const { startDomainMonitor } = require('./domainMonitor');
  *   startDomainMonitor(); // botu başlatırken bir kere çağırın
  *
- *   // Manuel tetikleme için bir komut eklemek isterseniz (örnek):
- *   // bot.onText(/\/domainkontrol/, async (msg) => {
- *   //   const rapor = await checkAllDomainsNow();
- *   //   bot.sendMessage(msg.chat.id, rapor);
- *   // });
+ * Telegram komutları eklemek için index.js dosyanıza aşağıdaki
+ * bot.onText bloklarını ekleyin (bu dosyanın altındaki örneklere bakın):
+ *   /domainekle domain.com   -> takibe yeni domain ekler
+ *   /domainsil domain.com    -> takipten domain çıkarır
+ *   /domainler               -> takip edilen domainleri listeler
+ *   /domainkontrol           -> anlık kontrol yapar, sonucu yazar
  * ----------------------------------------------------------------
  */
 
@@ -42,14 +43,6 @@ const cron = require('node-cron');
 
 // ------------------------- AYARLAR -------------------------
 
-// Takip edilecek domainler - istediğiniz kadar ekleyin/çıkarın
-const DOMAINS = [
-  'rekabet1182.com',
-  'rekabet1188.com',
-  'rekabet1190.com',
-  // 'rekabetXXXX.com',
-];
-
 const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
 const CHAT_ID = process.env.DOMAIN_MONITOR_CHAT_ID;
 
@@ -57,6 +50,13 @@ const CHAT_ID = process.env.DOMAIN_MONITOR_CHAT_ID;
 // "az önce neydi" bilgisini kaybetmeyelim (Railway restart olursa
 // ilk çalışmada sadece baseline kurulur, bildirim atılmaz).
 const STATE_FILE = path.join(__dirname, 'data', 'domainStatus.json');
+
+// Takip edilen domain listesi artık kodda sabit DEĞİL, diskte tutuluyor.
+// /domainekle ve /domainsil komutlarıyla Telegram'dan değiştirilebilir.
+const DOMAINS_FILE = path.join(__dirname, 'data', 'domains.json');
+
+// İlk çalıştırmada domains.json yoksa bu varsayılan liste ile oluşturulur.
+const VARSAYILAN_DOMAINLER = ['rekabet1182.com'];
 
 // ------------------------- YARDIMCI FONKSİYONLAR -------------------------
 
@@ -71,6 +71,53 @@ function loadState() {
 function saveState(state) {
   fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
   fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+function getDomains() {
+  try {
+    return JSON.parse(fs.readFileSync(DOMAINS_FILE, 'utf8'));
+  } catch {
+    saveDomains(VARSAYILAN_DOMAINLER);
+    return VARSAYILAN_DOMAINLER;
+  }
+}
+
+function saveDomains(domains) {
+  fs.mkdirSync(path.dirname(DOMAINS_FILE), { recursive: true });
+  fs.writeFileSync(DOMAINS_FILE, JSON.stringify(domains, null, 2));
+}
+
+function domainTemizle(ham) {
+  return ham
+    .trim()
+    .toLowerCase()
+    .replace(/^https?:\/\//, '')
+    .replace(/\/$/, '');
+}
+
+function addDomain(ham) {
+  const domain = domainTemizle(ham);
+  const domains = getDomains();
+  if (domains.includes(domain)) {
+    return { basarili: false, mesaj: `${domain} zaten listede.` };
+  }
+  domains.push(domain);
+  saveDomains(domains);
+  return { basarili: true, mesaj: `${domain} takip listesine eklendi.` };
+}
+
+function removeDomain(ham) {
+  const domain = domainTemizle(ham);
+  const domains = getDomains();
+  if (!domains.includes(domain)) {
+    return { basarili: false, mesaj: `${domain} zaten listede değil.` };
+  }
+  saveDomains(domains.filter((d) => d !== domain));
+  // İlgili durum kaydını da temizleyelim
+  const state = loadState();
+  delete state[domain];
+  saveState(state);
+  return { basarili: true, mesaj: `${domain} takip listesinden çıkarıldı.` };
 }
 
 async function sendTelegramAlert(text) {
@@ -216,7 +263,12 @@ async function checkAllDomainsNow() {
   const raporlar = [];
   let degisimVarMi = false;
 
-  for (const domain of DOMAINS) {
+  const domains = getDomains();
+  if (domains.length === 0) {
+    return 'Takip edilen domain yok. /domainekle domain.com ile ekleyebilirsiniz.';
+  }
+
+  for (const domain of domains) {
     const sonuc = await checkDomain(domain);
     raporlar.push(raporMetniOlustur(sonuc));
 
@@ -247,4 +299,11 @@ function startDomainMonitor() {
   });
 }
 
-module.exports = { startDomainMonitor, checkAllDomainsNow, checkDomain };
+module.exports = {
+  startDomainMonitor,
+  checkAllDomainsNow,
+  checkDomain,
+  getDomains,
+  addDomain,
+  removeDomain,
+};

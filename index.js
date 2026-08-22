@@ -1047,7 +1047,34 @@ bot.onText(/\/yardim|\/start/, async (msg) => {
   const metin = `🤖 <b>KOMUT LİSTESİ</b>\n━━━━━━━━━━━━━━━\n\n📋 <b>İş Listeleme</b>\n/acik — Tüm açık işler\n/kritik — Kritik işler\n/yüksek — Yüksek öncelikli işler\n/normal — Normal işler\n/biten — Bugün biten işler\n/biten 23.05.2026 — O güne ait bitenler\n\n✅ <b>İş Yönetimi</b>\n/yeni — Yeni iş aç\n/tamamla — İş tamamla\n/arsivle — Biten işleri arşivle\n\n🔁 <b>Tekrar Eden İşler</b>\n/tekraredenler — Tekrar eden işleri listele\n/tekraredenekle — Tekrar eden iş ekle\n\n👥 <b>Shift</b>\n/shift [bilgi] — Haftalık shift kaydet\n\n🤖 <b>Haydar (AI)</b>\n"haydar [istek]" — Haydar'a seslen\n"Haydar kapanabilirsin" — Haydar'ı kapat\n\n❌ /iptal — İşlemi iptal et`;
   await mesajGonder(msg.chat.id, metin);
 });
+bot.onText(/\/domainekle (.+)/, async (msg, match) => {
+  const { addDomain } = require('./domainMonitor');
+  const sonuc = addDomain(match[1]);
+  await mesajGonder(msg.chat.id, sonuc.mesaj);
+});
 
+bot.onText(/\/domainsil (.+)/, async (msg, match) => {
+  const { removeDomain } = require('./domainMonitor');
+  const sonuc = removeDomain(match[1]);
+  await mesajGonder(msg.chat.id, sonuc.mesaj);
+});
+
+bot.onText(/\/domainler/, async (msg) => {
+  const { getDomains } = require('./domainMonitor');
+  const domains = getDomains();
+  if (domains.length === 0) {
+    await mesajGonder(msg.chat.id, '📋 Takip edilen domain yok. /domainekle domain.com ile ekleyebilirsiniz.');
+    return;
+  }
+  await mesajGonder(msg.chat.id, `📋 <b>Takip Edilen Domainler (${domains.length})</b>\n━━━━━━━━━━━━━━━\n\n` + domains.map((d) => `• ${d}`).join('\n'));
+});
+
+bot.onText(/\/domainkontrol/, async (msg) => {
+  const { checkAllDomainsNow } = require('./domainMonitor');
+  await mesajGonder(msg.chat.id, '⏳ Kontrol ediliyor, birkaç saniye sürebilir...');
+  const rapor = await checkAllDomainsNow();
+  await mesajGonder(msg.chat.id, rapor);
+});
 // =========================================
 //   KONUŞMA AKIŞI
 // =========================================

@@ -1,0 +1,250 @@
+/**
+ * domainMonitor.js
+ * ----------------------------------------------------------------
+ * İşler Botu (Haydar) için domain erişim engeli takip modülü.
+ *
+ * Ne yapar:
+ *  - Belirlenen domainleri her 15 dakikada bir kontrol eder.
+ *  - check-host.net üzerinden GERÇEK Türkiye vantage node'larından
+ *    HTTP erişim testi yapar (captcha yok, resmi/halka açık API).
+ *  - Ek olarak domain'e Railway sunucusundan (TR dışı) doğrudan
+ *    erişim testi yapar -> genel "site tamamen down mu" sinyali verir.
+ *  - Best-effort olarak BTK/SGB resmi sorgu sayfasını da dener;
+ *    captcha ile karşılaşırsa otomatik atlar, log'a "manuel kontrol
+ *    gerekli" yazar (captcha çözme/atlatma YAPILMAZ - kasıtlı).
+ *  - Önceki durumla kıyaslar, DURUM DEĞİŞTİYSE Telegram'a bildirim
+ *    atar (her 15 dakikada spam atmaz, sadece değişimde).
+ *
+ * Kurulum:
+ *   npm install node-cron
+ *   (Node 18+ varsayılır - global fetch mevcut, node-fetch gerekmez)
+ *
+ * .env değişkenleri (mevcut İşler Botu .env dosyanıza ekleyin):
+ *   TELEGRAM_BOT_TOKEN=...        (zaten mevcut olmalı)
+ *   DOMAIN_MONITOR_CHAT_ID=...    (bildirimlerin gideceği chat/grup id)
+ *
+ * Mevcut bot dosyanıza (örn. index.js) entegrasyon:
+ *
+ *   const { startDomainMonitor, checkAllDomainsNow } = require('./domainMonitor');
+ *   startDomainMonitor(); // botu başlatırken bir kere çağırın
+ *
+ *   // Manuel tetikleme için bir komut eklemek isterseniz (örnek):
+ *   // bot.onText(/\/domainkontrol/, async (msg) => {
+ *   //   const rapor = await checkAllDomainsNow();
+ *   //   bot.sendMessage(msg.chat.id, rapor);
+ *   // });
+ * ----------------------------------------------------------------
+ */
+
+const fs = require('fs');
+const path = require('path');
+const cron = require('node-cron');
+
+// ------------------------- AYARLAR -------------------------
+
+// Takip edilecek domainler - istediğiniz kadar ekleyin/çıkarın
+const DOMAINS = [
+  'rekabet1182.com',
+  'rekabet1188.com',
+  'rekabet1190.com',
+  // 'rekabetXXXX.com',
+];
+
+const TELEGRAM_TOKEN = process.env.TELEGRAM_BOT_TOKEN;
+const CHAT_ID = process.env.DOMAIN_MONITOR_CHAT_ID;
+
+// Durum kaydını diskte tutuyoruz ki bot yeniden başlasa bile
+// "az önce neydi" bilgisini kaybetmeyelim (Railway restart olursa
+// ilk çalışmada sadece baseline kurulur, bildirim atılmaz).
+const STATE_FILE = path.join(__dirname, 'data', 'domainStatus.json');
+
+// ------------------------- YARDIMCI FONKSİYONLAR -------------------------
+
+function loadState() {
+  try {
+    return JSON.parse(fs.readFileSync(STATE_FILE, 'utf8'));
+  } catch {
+    return {};
+  }
+}
+
+function saveState(state) {
+  fs.mkdirSync(path.dirname(STATE_FILE), { recursive: true });
+  fs.writeFileSync(STATE_FILE, JSON.stringify(state, null, 2));
+}
+
+async function sendTelegramAlert(text) {
+  if (!TELEGRAM_TOKEN || !CHAT_ID) {
+    console.warn('[domainMonitor] TELEGRAM_BOT_TOKEN veya DOMAIN_MONITOR_CHAT_ID eksik, bildirim atılamadı.');
+    return;
+  }
+  try {
+    await fetch(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        chat_id: CHAT_ID,
+        text,
+        parse_mode: 'HTML',
+      }),
+    });
+  } catch (err) {
+    console.error('[domainMonitor] Telegram gönderim hatası:', err.message);
+  }
+}
+
+// ------------------------- SAĞLAYICI 1: check-host.net (TR vantage) -------------------------
+// Halka açık, captcha gerektirmez. İki adımlı: önce testi başlat, sonra sonucu çek.
+
+async function getTurkishNodes() {
+  const res = await fetch('https://check-host.net/nodes/hosts', {
+    headers: { Accept: 'application/json' },
+  });
+  const data = await res.json();
+  // data.nodes: { "node_id": { location: [...], country: [...], ... } }
+  return Object.entries(data.nodes || {})
+    .filter(([, info]) => (info.country || info.Country || '').toLowerCase().includes('turkey'))
+    .map(([nodeId]) => nodeId);
+}
+
+async function checkViaCheckHost(domain) {
+  try {
+    const trNodes = await getTurkishNodes();
+    const nodeParams = trNodes.slice(0, 3).map((n) => `node=${encodeURIComponent(n)}`).join('&');
+    const initRes = await fetch(
+      `https://check-host.net/check-http?host=https://${domain}&${nodeParams}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    const initData = await initRes.json();
+    if (!initData.ok || !initData.request_id) {
+      return { provider: 'check-host', status: 'BILINMIYOR', detail: 'İstek başlatılamadı' };
+    }
+
+    // check-host testleri asenkron çalışıyor, sonucun oluşması için kısa bekleme
+    await new Promise((r) => setTimeout(r, 7000));
+
+    const resultRes = await fetch(
+      `https://check-host.net/check-result/${initData.request_id}`,
+      { headers: { Accept: 'application/json' } }
+    );
+    const resultData = await resultRes.json();
+
+    const results = Object.values(resultData || {});
+    const basarili = results.filter((r) => Array.isArray(r) && r[0] && r[0][0] === 1).length;
+    const toplam = results.length || 1;
+
+    if (basarili === 0) {
+      return { provider: 'check-host', status: 'ENGELLI_OLABILIR', detail: `TR node'larının ${toplam}/${toplam} tanesi ulaşamadı` };
+    }
+    if (basarili < toplam) {
+      return { provider: 'check-host', status: 'KARISIK', detail: `${basarili}/${toplam} TR node ulaştı - kısmi engel olasılığı` };
+    }
+    return { provider: 'check-host', status: 'TEMIZ', detail: `${basarili}/${toplam} TR node başarıyla ulaştı` };
+  } catch (err) {
+    return { provider: 'check-host', status: 'HATA', detail: err.message };
+  }
+}
+
+// ------------------------- SAĞLAYICI 2: Doğrudan erişim (genel down kontrolü) -------------------------
+
+async function checkViaDirectFetch(domain) {
+  try {
+    const controller = new AbortController();
+    const timeout = setTimeout(() => controller.abort(), 8000);
+    const res = await fetch(`https://${domain}`, { signal: controller.signal });
+    clearTimeout(timeout);
+    return { provider: 'direct', status: res.ok ? 'ERISILEBILIR' : 'HATA_KODU', detail: `HTTP ${res.status}` };
+  } catch (err) {
+    return { provider: 'direct', status: 'ERISILEMIYOR', detail: err.message };
+  }
+}
+
+// ------------------------- SAĞLAYICI 3: BTK/SGB resmi sayfa (best-effort) -------------------------
+// Captcha ile karşılaşırsa OTOMATIK ATLANIR - captcha çözme/atlatma yapılmaz.
+
+async function checkViaResmiSayfa(domain) {
+  try {
+    const res = await fetch('https://internet.btk.gov.tr/sitesorgu/', { method: 'GET' });
+    const html = await res.text();
+    if (/captcha/i.test(html)) {
+      return { provider: 'resmi-sayfa', status: 'MANUEL_KONTROL_GEREKLI', detail: 'Captcha tespit edildi, otomatik sorgu atlandı' };
+    }
+    return { provider: 'resmi-sayfa', status: 'BILINMIYOR', detail: 'Sayfa formatı değişmiş olabilir, kontrol edin' };
+  } catch (err) {
+    return { provider: 'resmi-sayfa', status: 'ERISILEMIYOR', detail: 'Resmi sayfaya (muhtemelen SGB geçişi nedeniyle) ulaşılamadı' };
+  }
+}
+
+// ------------------------- ANA KONTROL MANTIĞI -------------------------
+
+function ozetVerdictOlustur(sonuclar) {
+  const ch = sonuclar.find((s) => s.provider === 'check-host');
+  if (ch?.status === 'ENGELLI_OLABILIR') return 'ENGELLI_SUPHESI';
+  if (ch?.status === 'KARISIK') return 'KISMI_ENGEL_SUPHESI';
+  if (ch?.status === 'TEMIZ') return 'TEMIZ';
+  return 'BILINMIYOR';
+}
+
+async function checkDomain(domain) {
+  const [chSonuc, directSonuc, resmiSonuc] = await Promise.all([
+    checkViaCheckHost(domain),
+    checkViaDirectFetch(domain),
+    checkViaResmiSayfa(domain),
+  ]);
+  const sonuclar = [chSonuc, directSonuc, resmiSonuc];
+  const verdict = ozetVerdictOlustur(sonuclar);
+  return { domain, verdict, sonuclar, timestamp: new Date().toISOString() };
+}
+
+function raporMetniOlustur(sonuc) {
+  const emoji = {
+    ENGELLI_SUPHESI: '🔴',
+    KISMI_ENGEL_SUPHESI: '🟠',
+    TEMIZ: '🟢',
+    BILINMIYOR: '⚪',
+  }[sonuc.verdict] || '⚪';
+
+  let metin = `${emoji} <b>${sonuc.domain}</b> — ${sonuc.verdict}\n`;
+  sonuc.sonuclar.forEach((s) => {
+    metin += `  • ${s.provider}: ${s.status} (${s.detail})\n`;
+  });
+  return metin;
+}
+
+async function checkAllDomainsNow() {
+  const state = loadState();
+  const raporlar = [];
+  let degisimVarMi = false;
+
+  for (const domain of DOMAINS) {
+    const sonuc = await checkDomain(domain);
+    raporlar.push(raporMetniOlustur(sonuc));
+
+    const oncekiVerdict = state[domain]?.verdict;
+    if (oncekiVerdict && oncekiVerdict !== sonuc.verdict) {
+      degisimVarMi = true;
+      await sendTelegramAlert(
+        `⚠️ <b>DURUM DEĞİŞTİ: ${domain}</b>\n${oncekiVerdict} ➜ ${sonuc.verdict}\n\n${raporMetniOlustur(sonuc)}`
+      );
+    }
+    state[domain] = { verdict: sonuc.verdict, timestamp: sonuc.timestamp };
+  }
+
+  saveState(state);
+  return raporlar.join('\n') + (degisimVarMi ? '\n\n(Değişiklik bildirimi Telegram\'a gönderildi)' : '\n\n(Önceki duruma göre değişiklik yok)');
+}
+
+// ------------------------- ZAMANLAYICI -------------------------
+
+function startDomainMonitor() {
+  console.log('[domainMonitor] Başlatıldı - her 15 dakikada bir kontrol edilecek.');
+  cron.schedule('*/15 * * * *', async () => {
+    try {
+      await checkAllDomainsNow();
+    } catch (err) {
+      console.error('[domainMonitor] Zamanlanmış kontrol hatası:', err.message);
+    }
+  });
+}
+
+module.exports = { startDomainMonitor, checkAllDomainsNow, checkDomain };
